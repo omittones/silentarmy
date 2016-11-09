@@ -15,9 +15,6 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="..\blake.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="..\main.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -27,11 +24,11 @@
     <ClCompile Include="..\sha256.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\blake.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\blake.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="..\param.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -42,6 +39,12 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="getopt.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\blake.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="clErrors.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

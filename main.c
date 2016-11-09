@@ -13,7 +13,11 @@
 
 #include <errno.h>
 #include <CL/cl.h>
-#include "blake.h"
+
+#define _CC
+#include "blake.hpp"
+#undef _CC
+
 #include "sha256.h"
 
 #ifdef WIN32

@@ -1,6 +1,8 @@
 #include <stdint.h>
 
+#ifndef _CC
 extern "C" {
+#endif
 
 	typedef struct  blake2b_state_s
 	{
@@ -13,4 +15,7 @@ extern "C" {
 	void zcash_blake2b_update(blake2b_state_t *st, const uint8_t *_msg,
 		uint32_t msg_len, uint32_t is_final);
 	void zcash_blake2b_final(blake2b_state_t *st, uint8_t *out, uint8_t outlen);
+
+#ifndef _CC
 }
+#endif

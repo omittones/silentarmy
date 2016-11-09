@@ -149,14 +149,15 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="..\blake.c" />
+    <ClCompile Include="..\blake.cpp" />
     <ClCompile Include="..\main.c" />
     <ClCompile Include="..\sha256.c" />
     <ClCompile Include="getopt.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\blake.h" />
+    <ClInclude Include="..\blake.hpp" />
     <ClInclude Include="..\param.h" />
+    <ClInclude Include="clErrors.h" />
     <ClInclude Include="getopt.h" />
     <ClInclude Include="gettimeofday.h" />
     <ClInclude Include="memrchr.h" />
