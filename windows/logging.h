@@ -4,7 +4,9 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdbool.h>
-#include "CL\opencl.h"
+#include <stdlib.h>
+#include "CL/opencl.h"
+#include "../sha256.h"
 #include "../param.h"
 
 void exit(int);
@@ -205,7 +207,7 @@ void examine_ht(unsigned round, cl_command_queue queue, cl_mem buf_ht)
 	free(ht);
 }
 #else
-void examine_ht(unsigned round, cl_command_queue queue, cl_mem buf_ht)
+inline void examine_ht(unsigned round, cl_command_queue queue, cl_mem buf_ht)
 {
 	(void)round;
 	(void)queue;
@@ -213,78 +215,19 @@ void examine_ht(unsigned round, cl_command_queue queue, cl_mem buf_ht)
 }
 #endif
 
-void examine_dbg(cl_command_queue queue, cl_mem buf_dbg, size_t dbg_size)
-{
-	debug_t     *dbg;
-	size_t      dropped_coll_total, dropped_stor_total;
-	if (verbose < 2)
-		return;
-	dbg = (debug_t *)malloc(dbg_size);
-	if (!dbg)
-		fatal("malloc: %s\n", strerror(errno));
-	check_clEnqueueReadBuffer(queue, buf_dbg,
-		CL_TRUE,	// cl_bool	blocking_read
-		0,		// size_t	offset
-		dbg_size,   // size_t	size
-		dbg,	// void		*ptr
-		0,		// cl_uint	num_events_in_wait_list
-		NULL,	// cl_event	*event_wait_list
-		NULL);	// cl_event	*event
-	dropped_coll_total = dropped_stor_total = 0;
-	for (unsigned tid = 0; tid < dbg_size / sizeof(*dbg); tid++)
-	{
-		dropped_coll_total += dbg[tid].dropped_coll;
-		dropped_stor_total += dbg[tid].dropped_stor;
-		if (0 && (dbg[tid].dropped_coll || dbg[tid].dropped_stor))
-			debug("thread %6d: dropped_coll %zd dropped_stor %zd\n", tid,
-				dbg[tid].dropped_coll, dbg[tid].dropped_stor);
-	}
-	debug("Dropped: %zd (coll) %zd (stor)\n",
-		dropped_coll_total, dropped_stor_total);
-	free(dbg);
-}
+void examine_dbg(cl_command_queue queue, cl_mem buf_dbg, size_t dbg_size);
 
-/*
-** Print all solutions.
-**
-** In mining mode, return the number of shares, that is the number of solutions
-** that were under the target.
-*/
-uint32_t print_sols(sols_t *all_sols, uint64_t *nonce, uint32_t nr_valid_sols,
-	uint8_t *header, size_t fixed_nonce_bytes, uint8_t *target,
-	char *job_id)
-{
-	uint8_t		*valid_sols;
-	uint32_t		counted;
-	uint32_t		shares = 0;
-	valid_sols = (uint8_t*)malloc(nr_valid_sols * SOL_SIZE);
-	if (!valid_sols)
-		fatal("malloc: %s\n", strerror(errno));
-	counted = 0;
-	for (uint32_t i = 0; i < all_sols->nr; i++)
-		if (all_sols->valid[i])
-		{
-			if (counted >= nr_valid_sols)
-				fatal("Bug: more than %d solutions\n", nr_valid_sols);
-			memcpy(valid_sols + counted * SOL_SIZE, all_sols->values[i],
-				SOL_SIZE);
-			counted++;
-		}
-	assert(counted == nr_valid_sols);
-	// sort the solutions amongst each other, to make the solver's output
-	// deterministic and testable
-	qsort(valid_sols, nr_valid_sols, SOL_SIZE, sol_cmp);
-	for (uint32_t i = 0; i < nr_valid_sols; i++)
-	{
-		uint32_t	*inputs = (uint32_t *)(valid_sols + i * SOL_SIZE);
-		if (!mining && show_encoded)
-			print_encoded_sol(inputs, 1 << PARAM_K);
-		if (verbose)
-			print_sol(inputs, nonce);
-		if (mining)
-			shares += print_solver_line(inputs, header, fixed_nonce_bytes,
-				target, job_id);
-	}
-	free(valid_sols);
-	return shares;
-}
+void store_encoded_sol(uint8_t *out, uint32_t *inputs, uint32_t n);
+
+void print_encoded_sol(uint32_t *inputs, uint32_t n);
+
+void print_sol(uint32_t *values, uint64_t *nonce);
+
+int32_t cmp_target_256(void *_a, void *_b);
+
+int sol_cmp(const void *_a, const void *_b);
+
+uint32_t print_solver_line(uint32_t *values, uint8_t *header, size_t fixed_nonce_bytes, uint8_t *target, char *job_id);
+
+uint32_t print_sols(sols_t *all_sols, uint64_t *nonce, uint32_t nr_valid_sols, uint8_t *header, size_t fixed_nonce_bytes, 
+	uint8_t *target, char *job_id);
