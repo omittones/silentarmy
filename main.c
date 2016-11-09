@@ -58,6 +58,20 @@ uint32_t	do_list_devices = 0;
 uint32_t	gpu_to_use = 0;
 uint32_t	mining = 0;
 
+typedef struct solver_context_s {
+	cl_context ctx;
+	cl_program program;
+	cl_command_queue queue;
+	cl_kernel k_init_ht;
+	cl_kernel k_rounds[PARAM_K];
+	cl_kernel k_sols;
+	cl_mem buf_ht[2];
+	cl_mem buf_sols;
+	cl_mem buf_dbg;
+	size_t dbg_size;
+	void* buf_dbg_helper;
+} solver_context_t;
+
 typedef struct  debug_s
 {
 	uint32_t    dropped_coll;
@@ -792,7 +806,7 @@ void sort_pair(uint32_t *a, uint32_t len)
 uint32_t verify_sol(sols_t *sols, unsigned sol_i)
 {
 	uint32_t	*inputs = sols->values[sol_i];
-	//uint32_t	seen_len = (1 << (PREFIX + 1)) / 8; 
+	//uint32_t	seen_len = (1 << (PREFIX + 1)) / 8;
 	//uint8_t	seen[seen_len]; // @mrb MSVC didn't like this.
 	uint8_t	seen[SEEN_LEN];
 	uint32_t	i;
@@ -881,9 +895,8 @@ uint32_t verify_sols(cl_command_queue queue, cl_mem buf_sols, uint64_t *nonce,
 **
 ** Return the number of solutions found.
 */
-uint32_t solve_equihash(cl_context ctx, cl_command_queue queue,
-	cl_kernel k_init_ht, cl_kernel *k_rounds, cl_kernel k_sols,
-	cl_mem *buf_ht, cl_mem buf_sols, cl_mem buf_dbg, size_t dbg_size,
+uint32_t solve_equihash(
+	solver_context_t self,
 	uint8_t *header, size_t header_len, uint64_t nonce,
 	size_t fixed_nonce_bytes, uint8_t *target, char *job_id,
 	uint32_t *shares)
@@ -929,41 +942,41 @@ uint32_t solve_equihash(cl_context ctx, cl_command_queue queue,
 	// Process first BLAKE2b-400 block
 	zcash_blake2b_init(&blake, ZCASH_HASH_LEN, PARAM_N, PARAM_K);
 	zcash_blake2b_update(&blake, header, 128, 0);
-	buf_blake_st = check_clCreateBuffer(ctx, CL_MEM_READ_ONLY |
+	buf_blake_st = check_clCreateBuffer(self.ctx, CL_MEM_READ_ONLY |
 		CL_MEM_COPY_HOST_PTR, sizeof(blake.h), &blake.h);
 	for (unsigned round = 0; round < PARAM_K; round++)
 	{
 		if (verbose > 1)
 			debug("Round %d\n", round);
 		if (round < 2)
-			init_ht(queue, k_init_ht, buf_ht[round % 2]);
+			init_ht(self.queue, self.k_init_ht, self.buf_ht[round % 2]);
 		if (!round)
 		{
-			check_clSetKernelArg(k_rounds[round], 0, &buf_blake_st);
-			check_clSetKernelArg(k_rounds[round], 1, &buf_ht[round % 2]);
+			check_clSetKernelArg(self.k_rounds[round], 0, &buf_blake_st);
+			check_clSetKernelArg(self.k_rounds[round], 1, &self.buf_ht[round % 2]);
 			global_ws = select_work_size_blake();
 		}
 		else
 		{
-			check_clSetKernelArg(k_rounds[round], 0, &buf_ht[(round - 1) % 2]);
-			check_clSetKernelArg(k_rounds[round], 1, &buf_ht[round % 2]);
+			check_clSetKernelArg(self.k_rounds[round], 0, &self.buf_ht[(round - 1) % 2]);
+			check_clSetKernelArg(self.k_rounds[round], 1, &self.buf_ht[round % 2]);
 			global_ws = NR_ROWS;
 		}
-		check_clSetKernelArg(k_rounds[round], 2, &buf_dbg);
+		check_clSetKernelArg(self.k_rounds[round], 2, &self.buf_dbg);
 		if (round == PARAM_K - 1)
-			check_clSetKernelArg(k_rounds[round], 3, &buf_sols);
-		check_clEnqueueNDRangeKernel(queue, k_rounds[round], 1, NULL,
+			check_clSetKernelArg(self.k_rounds[round], 3, &self.buf_sols);
+		check_clEnqueueNDRangeKernel(self.queue, self.k_rounds[round], 1, NULL,
 			&global_ws, &local_work_size, 0, NULL, NULL);
-		examine_ht(round, queue, buf_ht[round % 2]);
-		examine_dbg(queue, buf_dbg, dbg_size);
+		examine_ht(round, self.queue, self.buf_ht[round % 2]);
+		examine_dbg(self.queue, self.buf_dbg, self.dbg_size);
 	}
-	check_clSetKernelArg(k_sols, 0, &buf_ht[0]);
-	check_clSetKernelArg(k_sols, 1, &buf_ht[1]);
-	check_clSetKernelArg(k_sols, 2, &buf_sols);
+	check_clSetKernelArg(self.k_sols, 0, &self.buf_ht[0]);
+	check_clSetKernelArg(self.k_sols, 1, &self.buf_ht[1]);
+	check_clSetKernelArg(self.k_sols, 2, &self.buf_sols);
 	global_ws = NR_ROWS;
-	check_clEnqueueNDRangeKernel(queue, k_sols, 1, NULL,
+	check_clEnqueueNDRangeKernel(self.queue, self.k_sols, 1, NULL,
 		&global_ws, &local_work_size, 0, NULL, NULL);
-	sol_found = verify_sols(queue, buf_sols, nonce_ptr, header,
+	sol_found = verify_sols(self.queue, self.buf_sols, nonce_ptr, header,
 		fixed_nonce_bytes, target, job_id, shares);
 	clReleaseMemObject(buf_blake_st);
 	return sol_found;
@@ -1108,10 +1121,7 @@ void mining_parse_job(char *str, uint8_t *target, size_t target_len,
 /*
 ** Run in mining mode.
 */
-void mining_mode(cl_context ctx, cl_command_queue queue,
-	cl_kernel k_init_ht, cl_kernel *k_rounds, cl_kernel k_sols,
-	cl_mem *buf_ht, cl_mem buf_sols, cl_mem buf_dbg, size_t dbg_size,
-	uint8_t *header)
+void mining_mode(solver_context_t self, uint8_t *header)
 {
 	char		line[4096];
 	uint8_t		target[SHA256_DIGEST_SIZE];
@@ -1143,8 +1153,7 @@ void mining_mode(cl_context ctx, cl_command_queue queue,
 				job_id, sizeof(job_id),
 				header, ZCASH_BLOCK_HEADER_LEN,
 				&fixed_nonce_bytes);
-		total += solve_equihash(ctx, queue, k_init_ht, k_rounds, k_sols, buf_ht,
-			buf_sols, buf_dbg, dbg_size, header, ZCASH_BLOCK_HEADER_LEN, i,
+		total += solve_equihash(self, header, ZCASH_BLOCK_HEADER_LEN, i,
 			fixed_nonce_bytes, target, job_id, &shares);
 		total_shares += shares;
 		if ((t1 = now()) > t0 + status_period)
@@ -1156,51 +1165,42 @@ void mining_mode(cl_context ctx, cl_command_queue queue,
 	}
 }
 
-void run_opencl(uint8_t *header, size_t header_len, cl_context ctx,
-	cl_command_queue queue, cl_kernel k_init_ht, cl_kernel *k_rounds,
-	cl_kernel k_sols)
+
+void run_opencl(solver_context_t solver, uint8_t *header, size_t header_len)
 {
-	cl_mem              buf_ht[2], buf_sols, buf_dbg;
-	void                *dbg = NULL;
-#ifdef ENABLE_DEBUG
-	size_t              dbg_size = NR_ROWS * sizeof(debug_t);
-#else
-	size_t              dbg_size = 1 * sizeof(debug_t);
-#endif
 	uint64_t		nonce;
 	uint64_t		total;
-	if (!mining || verbose)
-		fprintf(stderr, "Hash tables will use %.1f MB\n", 2.0 * HT_SIZE / 1e6);
-	// Set up buffers for the host and memory objects for the kernel
-	if (!(dbg = calloc(dbg_size, 1)))
-		fatal("malloc: %s\n", strerror(errno));
-	buf_dbg = check_clCreateBuffer(ctx, CL_MEM_READ_WRITE |
-		CL_MEM_COPY_HOST_PTR, dbg_size, dbg);
-	buf_ht[0] = check_clCreateBuffer(ctx, CL_MEM_READ_WRITE, HT_SIZE, NULL);
-	buf_ht[1] = check_clCreateBuffer(ctx, CL_MEM_READ_WRITE, HT_SIZE, NULL);
-	buf_sols = check_clCreateBuffer(ctx, CL_MEM_READ_WRITE, sizeof(sols_t),
-		NULL);
-	if (mining)
-		mining_mode(ctx, queue, k_init_ht, k_rounds, k_sols, buf_ht,
-			buf_sols, buf_dbg, dbg_size, header);
-	fprintf(stderr, "Running...\n");
-	total = 0;
-	uint64_t t0 = now();
-	// Solve Equihash for a few nonces
-	for (nonce = 0; nonce < nr_nonces; nonce++)
-		total += solve_equihash(ctx, queue, k_init_ht, k_rounds, k_sols, buf_ht,
-			buf_sols, buf_dbg, dbg_size, header, header_len, nonce,
-			0, NULL, NULL, NULL);
-	uint64_t t1 = now();
-	fprintf(stderr, "Total %" PRId64 " solutions in %.1f ms (%.1f Sol/s)\n",
-		total, (t1 - t0) / 1e3, total / ((t1 - t0) / 1e6));
-	// Clean up
-	if (dbg)
-		free(dbg);
-	clReleaseMemObject(buf_dbg);
-	clReleaseMemObject(buf_sols);
-	clReleaseMemObject(buf_ht[0]);
-	clReleaseMemObject(buf_ht[1]);
+		
+	if (mining) {
+
+		mining_mode(solver, header);
+
+	}
+	else {
+
+		fprintf(stderr, "Running...\n");
+		total = 0;
+		uint64_t t0 = now();
+		while (total < 100) {
+
+			//randomize header
+			for (size_t i = 0; i < header_len; i += sizeof(int))
+				*((int*)(header + i)) = rand();
+
+			// Solve Equihash while solution is not found
+			for (nonce = 0; nonce < 1024; nonce++) {
+				int sols = solve_equihash(solver, header, header_len, nonce, 0, NULL, NULL, NULL);
+				total += sols;
+				if (sols > 0)
+					break;
+			}
+		}
+
+		uint64_t t1 = now();
+
+		fprintf(stderr, "Total %" PRId64 " solutions in %.1f ms (%.1f Sol/s)\n",
+			total, (t1 - t0) / 1e3, total / ((t1 - t0) / 1e6));
+	}	
 }
 
 /*
@@ -1217,8 +1217,7 @@ void run_opencl(uint8_t *header, size_t header_len, cl_context ctx,
 **
 ** Return 1 iff the selected device was found.
 */
-unsigned scan_platform(cl_platform_id plat, cl_uint *nr_devs_total,
-	cl_platform_id *plat_id, cl_device_id *dev_id)
+unsigned scan_platform(cl_platform_id plat, cl_uint *nr_devs_total, cl_platform_id *plat_id, cl_device_id *dev_id)
 {
 	cl_device_type	typ = CL_DEVICE_TYPE_ALL;
 	cl_uint		nr_devs = 0;
@@ -1295,27 +1294,28 @@ void scan_platforms(cl_platform_id *plat_id, cl_device_id *dev_id)
 	free(platforms);
 }
 
-void init_and_run_opencl(uint8_t *header, size_t header_len)
-{
+
+solver_context_t setup_context() {
+
+	solver_context_t self;
+	self.buf_dbg_helper = NULL;
+
 	cl_platform_id	plat_id = 0;
 	cl_device_id	dev_id = 0;
-	cl_kernel		k_rounds[PARAM_K];
 	cl_int		status;
 	scan_platforms(&plat_id, &dev_id);
 	if (!plat_id || !dev_id)
 		fatal("Selected device (ID %d) not found; see --list\n", gpu_to_use);
 	/* Create context.*/
-	cl_context context = clCreateContext(NULL, 1, &dev_id,
-		NULL, NULL, &status);
-	if (status != CL_SUCCESS || !context)
+	self.ctx = clCreateContext(NULL, 1, &dev_id, NULL, NULL, &status);
+	if (status != CL_SUCCESS || !self.ctx)
 		fatal("clCreateContext (%d)\n", status);
 	/* Creating command queue associate with the context.*/
-	cl_command_queue queue = clCreateCommandQueue(context, dev_id,
-		0, &status);
-	if (status != CL_SUCCESS || !queue)
+	self.queue = clCreateCommandQueue(self.ctx, dev_id, 0, &status);
+	if (status != CL_SUCCESS || !self.queue)
 		fatal("clCreateCommandQueue (%d)\n", status);
 	/* Create program object */
-	cl_program program;
+
 	const char *source;
 	size_t source_len;
 #ifdef WIN32
@@ -1324,52 +1324,92 @@ void init_and_run_opencl(uint8_t *header, size_t header_len)
 	source = ocl_code;
 #endif
 	source_len = strlen(source);
-	program = clCreateProgramWithSource(context, 1, (const char **)&source,
-		&source_len, &status);
-	if (status != CL_SUCCESS || !program)
+	self.program = clCreateProgramWithSource(self.ctx, 1, (const char **)&source, &source_len, &status);
+	if (status != CL_SUCCESS || !self.program)
 		fatal("clCreateProgramWithSource (%d)\n", status);
 	/* Build program. */
 	if (!mining || verbose)
 		fprintf(stderr, "Building program\n");
-	status = clBuildProgram(program, 1, &dev_id,
-		"-I .. -I .", // compile options
+	status = clBuildProgram(self.program, 1, &dev_id, "-I .. -I .", // compile options
 		NULL, NULL);
 	if (status != CL_SUCCESS)
 	{
 		warn("OpenCL build failed (%d). Build log follows:\n", status);
-		get_program_build_log(program, dev_id);
+		get_program_build_log(self.program, dev_id);
 		exit(1);
 	}
 	//get_program_bins(program);
 	// Create kernel objects
-	cl_kernel k_init_ht = clCreateKernel(program, "kernel_init_ht", &status);
-	if (status != CL_SUCCESS || !k_init_ht)
+	self.k_init_ht = clCreateKernel(self.program, "kernel_init_ht", &status);
+	if (status != CL_SUCCESS || !self.k_init_ht)
 		fatal("clCreateKernel (%d)\n", status);
 	for (unsigned round = 0; round < PARAM_K; round++)
 	{
 		char	name[128];
 		snprintf(name, sizeof(name), "kernel_round%d", round);
-		k_rounds[round] = clCreateKernel(program, name, &status);
-		if (status != CL_SUCCESS || !k_rounds[round])
+		self.k_rounds[round] = clCreateKernel(self.program, name, &status);
+		if (status != CL_SUCCESS || !self.k_rounds[round])
 			fatal("clCreateKernel (%d)\n", status);
 	}
-	cl_kernel k_sols = clCreateKernel(program, "kernel_sols", &status);
-	if (status != CL_SUCCESS || !k_sols)
+	self.k_sols = clCreateKernel(self.program, "kernel_sols", &status);
+	if (status != CL_SUCCESS || !self.k_sols)
 		fatal("clCreateKernel (%d)\n", status);
-	// Run
-	run_opencl(header, header_len, context, queue, k_init_ht, k_rounds, k_sols);
+
+#ifdef ENABLE_DEBUG
+	self.dbg_size = NR_ROWS * sizeof(debug_t);
+#else
+	self.dbg_size = 1 * sizeof(debug_t);
+#endif
+
+	if (!mining || verbose)
+		fprintf(stderr, "Hash tables will use %.1f MB\n", 2.0 * HT_SIZE / 1e6);
+	// Set up buffers for the host and memory objects for the kernel
+	if (!(self.buf_dbg_helper = calloc(self.dbg_size, 1)))
+		fatal("malloc: %s\n", strerror(errno));
+	self.buf_dbg = check_clCreateBuffer(self.ctx, CL_MEM_READ_WRITE |
+		CL_MEM_COPY_HOST_PTR, self.dbg_size, self.buf_dbg_helper);
+	self.buf_ht[0] = check_clCreateBuffer(self.ctx, CL_MEM_READ_WRITE, HT_SIZE, NULL);
+	self.buf_ht[1] = check_clCreateBuffer(self.ctx, CL_MEM_READ_WRITE, HT_SIZE, NULL);
+	self.buf_sols = check_clCreateBuffer(self.ctx, CL_MEM_READ_WRITE, sizeof(sols_t),
+		NULL);
+
+	return self;
+}
+
+void destroy_context(solver_context_t self) {
+
+	// Clean up
+	if (self.buf_dbg_helper)
+		free(self.buf_dbg_helper);
+
+	clReleaseMemObject(self.buf_dbg);
+	clReleaseMemObject(self.buf_sols);
+	clReleaseMemObject(self.buf_ht[0]);
+	clReleaseMemObject(self.buf_ht[1]);
+
 	// Release resources
 	assert(CL_SUCCESS == 0);
-	status = CL_SUCCESS;
-	status |= clReleaseKernel(k_init_ht);
+	auto status = CL_SUCCESS;
+	status |= clReleaseKernel(self.k_init_ht);
 	for (unsigned round = 0; round < PARAM_K; round++)
-		status |= clReleaseKernel(k_rounds[round]);
-	status |= clReleaseKernel(k_sols);
-	status |= clReleaseProgram(program);
-	status |= clReleaseCommandQueue(queue);
-	status |= clReleaseContext(context);
+		status |= clReleaseKernel(self.k_rounds[round]);
+	status |= clReleaseKernel(self.k_sols);
+	status |= clReleaseProgram(self.program);
+	status |= clReleaseCommandQueue(self.queue);
+	status |= clReleaseContext(self.ctx);
 	if (status)
 		fprintf(stderr, "Cleaning resources failed\n");
+
+}
+
+void init_and_run_opencl(uint8_t *header, size_t header_len)
+{
+	solver_context_t solver = setup_context();
+
+	// Run
+	run_opencl(solver, header, header_len);
+
+	destroy_context(solver);
 }
 
 uint32_t parse_header(uint8_t *h, size_t h_len, const char *hex)
