@@ -1,7 +1,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <assert.h>
-#include "blake.h"
+#include "blake.hpp"
 
 static const uint32_t   blake2b_block_len = 128;
 static const uint32_t   blake2b_rounds = 12;
