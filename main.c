@@ -226,26 +226,53 @@ unsigned nr_compute_units(const char *gpu)
     return 0;
 }
 
+void dump(const char *fname, void *data, size_t len)
+{
+	int			fd;
+	ssize_t		ret;
+	if (-1 == (fd = open(fname, O_WRONLY | O_CREAT | O_TRUNC, 0666)))
+		fatal("%s: %s\n", fname, strerror(errno));
+	ret = write(fd, data, len);
+	if (ret == -1)
+		fatal("write: %s: %s\n", fname, strerror(errno));
+	if ((size_t)ret != len)
+		fatal("%s: partial write\n", fname);
+	if (-1 == close(fd))
+		fatal("close: %s: %s\n", fname, strerror(errno));
+}
+
 void load_file(const char *fname, char **dat, size_t *dat_len)
 {
-    struct stat	st;
-    int		fd;
-    ssize_t	ret;
-    if (-1 == (fd = open(fname, O_RDONLY)))
-	fatal("%s: %s\n", fname, strerror(errno));
-    if (fstat(fd, &st))
-	fatal("fstat: %s: %s\n", fname, strerror(errno));
-    *dat_len = st.st_size;
-    if (!(*dat = (char *)malloc(*dat_len + 1)))
-	fatal("malloc: %s\n", strerror(errno));
-    ret = read(fd, *dat, *dat_len);
-    if (ret < 0)
-	fatal("read: %s: %s\n", fname, strerror(errno));
-    if ((size_t)ret != *dat_len)
-	fatal("%s: partial read\n", fname);
-    if (close(fd))
-	fatal("close: %s: %s\n", fname, strerror(errno));
-    (*dat)[*dat_len] = 0;
+	struct stat	st;
+	int		fd;
+	ssize_t	ret;
+	if (-1 == (fd = open(fname, O_RDONLY)))
+		fatal("%s: %s\n", fname, strerror(errno));
+	if (fstat(fd, &st))
+		fatal("fstat: %s: %s\n", fname, strerror(errno));
+	*dat_len = st.st_size;
+	if (!(*dat = (char *)malloc(*dat_len + 1)))
+		fatal("malloc: %s\n", strerror(errno));
+
+	size_t offset = 0;
+	while (1) {
+		int maxchars = max(0, *dat_len - offset);
+		if (maxchars == 0)
+			fatal("not enough memory");
+		ret = read(fd, *dat + offset, maxchars);
+		if (ret < 0)
+			fatal("read: %s: %s\n", fname, strerror(errno));
+		offset += ret;
+		if (ret == 0)
+			break;
+	}
+
+	*dat_len = offset;
+
+	if (close(fd))
+		fatal("close: %s: %s\n", fname, strerror(errno));
+
+	(*dat)[*dat_len] = 0;
 }
 
 void get_program_build_log(cl_program program, cl_device_id device)
@@ -261,21 +288,6 @@ void get_program_build_log(cl_program program, cl_device_id device)
     if (status != CL_SUCCESS)
 	fatal("clGetProgramBuildInfo (%d)\n", status);
     fprintf(stderr, "%s\n", val);
-}
-
-void dump(const char *fname, void *data, size_t len)
-{
-    int			fd;
-    ssize_t		ret;
-    if (-1 == (fd = open(fname, O_WRONLY | O_CREAT | O_TRUNC, 0666)))
-	fatal("%s: %s\n", fname, strerror(errno));
-    ret = write(fd, data, len);
-    if (ret == -1)
-	fatal("write: %s: %s\n", fname, strerror(errno));
-    if ((size_t)ret != len)
-	fatal("%s: partial write\n", fname);
-    if (-1 == close(fd))
-	fatal("close: %s: %s\n", fname, strerror(errno));
 }
 
 void get_program_bins(cl_program program)
