@@ -5,9 +5,6 @@
 
 #define min(a,b) ((a)>(b)?(b):(a))
 
-extern bool mining;
-extern bool show_encoded;
-
 void examine_dbg(cl_command_queue queue, cl_mem buf_dbg, size_t dbg_size)
 {
 	debug_t     *dbg;
@@ -224,13 +221,14 @@ uint32_t print_sols(sols_t *all_sols, uint64_t *nonce, uint32_t nr_valid_sols,
 	for (uint32_t i = 0; i < nr_valid_sols; i++)
 	{
 		uint32_t	*inputs = (uint32_t *)(valid_sols + i * SOL_SIZE);
-		if (!mining && show_encoded)
-			print_encoded_sol(inputs, 1 << PARAM_K);
+
+		//print_encoded_sol(inputs, 1 << PARAM_K);
 		if (verbose)
 			print_sol(inputs, nonce);
+		/*
 		if (mining)
-			shares += print_solver_line(inputs, header, fixed_nonce_bytes,
-				target, job_id);
+			shares += print_solver_line(inputs, header, fixed_nonce_bytes, target, job_id);
+		*/
 	}
 	free(valid_sols);
 	return shares;

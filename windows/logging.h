@@ -11,7 +11,7 @@
 
 void exit(int);
 
-extern bool verbose;
+extern uint16_t verbose;
 
 typedef struct  debug_s
 {

@@ -151,7 +151,7 @@
   <ItemGroup>
     <ClCompile Include="..\blake.cpp" />
     <ClCompile Include="..\main.cpp" />
-    <ClCompile Include="..\sha256.c" />
+    <ClCompile Include="..\sha256.cpp" />
     <ClCompile Include="..\solver.cpp" />
     <ClCompile Include="getopt.cpp" />
     <ClCompile Include="logging.cpp" />

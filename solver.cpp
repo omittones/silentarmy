@@ -118,10 +118,10 @@ void scan_platforms(
 	status = clGetPlatformIDs(0, NULL, &nr_platforms);
 	if (status != CL_SUCCESS)
 		fatal("Cannot get OpenCL platforms (%d)\n", status);
-	if (!nr_platforms || verbose)
-		fprintf(stderr, "Found %d OpenCL platform(s)\n", nr_platforms);
 	if (!nr_platforms)
-		exit(1);
+		fatal("Did not find any OpenCL platforms.");
+	
+	debug("Found %d OpenCL platform(s)\n", nr_platforms);
 	platforms = (cl_platform_id *)malloc(nr_platforms * sizeof(*platforms));
 	if (!platforms)
 		fatal("malloc: %s\n", strerror(errno));
@@ -505,6 +505,15 @@ uint32_t solve_equihash(
 	return sol_found;
 }
 
+void __stdcall error_callback(
+	const char *errinfo,
+	const void *context,
+	size_t context_len,
+	void *user_data) {
+
+	warn("ERROR: %s", errinfo);
+}
+
 solver_context_t setup_context(int gpu_to_use, bool mining) {
 
 	solver_context_t self;
@@ -516,16 +525,18 @@ solver_context_t setup_context(int gpu_to_use, bool mining) {
 	scan_platforms(gpu_to_use, &plat_id, &dev_id);
 	if (!plat_id || !dev_id)
 		fatal("Selected device (ID %d) not found; see --list\n", gpu_to_use);
+
 	/* Create context.*/
-	self.ctx = clCreateContext(NULL, 1, &dev_id, NULL, NULL, &status);
+	self.ctx = clCreateContext(NULL, 1, &dev_id, &error_callback, &self, &status);
 	if (status != CL_SUCCESS || !self.ctx)
 		fatal("clCreateContext (%d)\n", status);
+
 	/* Creating command queue associate with the context.*/
 	self.queue = clCreateCommandQueue(self.ctx, dev_id, 0, &status);
 	if (status != CL_SUCCESS || !self.queue)
 		fatal("clCreateCommandQueue (%d)\n", status);
+	
 	/* Create program object */
-
 	char *source;
 	size_t source_len;
 #ifdef WIN32
@@ -609,5 +620,4 @@ void destroy_context(solver_context_t self) {
 	status |= clReleaseContext(self.ctx);
 	if (status)
 		fprintf(stderr, "Cleaning resources failed\n");
-
 }

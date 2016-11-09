@@ -10,15 +10,10 @@
 #include <sys/types.h>
 #include <fcntl.h>
 #include <sys/stat.h>
-#include "windows\logging.h"
-
 #include <errno.h>
 #include <CL/cl.h>
-
-#define _CC
+#include "windows/logging.h"
 #include "blake.hpp"
-#undef _CC
-
 #include "sha256.h"
 #include "solver.h"
 
@@ -29,10 +24,9 @@ typedef uint32_t	uint;
 #define MIN(A, B)	(((A) < (B)) ? (A) : (B))
 #define MAX(A, B)	(((A) > (B)) ? (A) : (B))
 
-bool             verbose = 0;
+uint16_t	verbose = 0;
 uint32_t	show_encoded = 0;
 uint64_t	nr_nonces = 1;
-uint32_t	do_list_devices = 0;
 uint32_t	gpu_to_use = 0;
 uint32_t	mining = 0;
 
@@ -292,8 +286,8 @@ void mining_mode(solver_context_t self, uint8_t *header)
 	uint64_t		total = 0;
 	uint32_t		shares;
 	uint64_t		total_shares = 0;
-	uint64_t		t0, t1;
-	uint64_t		status_period = 500e3; // time (usec) between statuses
+	uint64_t		t0 = 0, t1 = 0;
+	uint64_t		status_period = 500000; // time (usec) between statuses
 	puts("SILENTARMY mining mode ready");
 	fflush(stdout);
 
@@ -374,19 +368,21 @@ void init_and_run_opencl(uint8_t *header, size_t header_len)
 	destroy_context(solver);
 }
 
-uint32_t parse_header(uint8_t *h, size_t h_len, const char *hex)
+size_t parse_header(uint8_t *h, size_t h_len, const char *hex)
 {
 	size_t      hex_len;
 	size_t      bin_len;
 	size_t	opt0 = ZCASH_BLOCK_HEADER_LEN;
 	size_t	opt1 = ZCASH_BLOCK_HEADER_LEN - ZCASH_NONCE_LEN;
 	size_t      i;
+	
 	if (!hex)
 	{
-		if (!do_list_devices && !mining)
+		if (!mining)
 			fprintf(stderr, "Solving default all-zero %d-byte header\n", opt0);
 		return opt1;
 	}
+
 	hex_len = strlen(hex);
 	bin_len = hex_len / 2;
 	if (hex_len % 2)
@@ -502,7 +498,7 @@ int main(int argc, char **argv)
 				fatal("Unsupported k (must be %d)\n", PARAM_K);
 			break;
 		case OPT_LIST:
-			do_list_devices = 1;
+			gpu_to_use = -1;
 			break;
 		case OPT_USE:
 			gpu_to_use = parse_num(optarg);

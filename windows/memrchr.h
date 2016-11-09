@@ -22,28 +22,11 @@
    You should have received a copy of the GNU General Public License
    along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-#if defined _LIBC
-# include <memcopy.h>
-#else
-//# include <config.h>
-# define reg_char char
-#endif
-
 #include <string.h>
 #include <limits.h>
 
-#undef __memrchr
-#ifdef _LIBC
-# undef memrchr
-#endif
-
-#ifndef weak_alias
-# define __memrchr memrchr
-#endif
-
 /* Search no more than N bytes of S for C.  */
-void *
-__memrchr (void const *s, int c_in, size_t n)
+inline void * memrchr(void const *s, int c_in, size_t n)
 {
   /* On 32-bit hardware, choosing longword to be a 32-bit unsigned
      long instead of a 64-bit uintmax_t tends to give better
@@ -56,7 +39,7 @@ __memrchr (void const *s, int c_in, size_t n)
   const longword *longword_ptr;
   longword repeated_one;
   longword repeated_c;
-  unsigned reg_char c;
+  unsigned char c;
 
   c = (unsigned char) c_in;
 
@@ -156,6 +139,3 @@ __memrchr (void const *s, int c_in, size_t n)
 
   return NULL;
 }
-#ifdef weak_alias
-weak_alias (__memrchr, memrchr)
-#endif
