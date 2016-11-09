@@ -1,6 +1,9 @@
 /windows/x64
-/sa-solver.pdb
-/sa-solver.v12.suo
+*.pdb
+*.suo
+*.user
+*.sdf
+*.opendb
 /sa-solver.exp
 /sa-solver.lib
 /.hg/
