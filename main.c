@@ -4,6 +4,7 @@
 #include <stdarg.h>
 #include <string.h>
 #include <stdint.h>
+#include <inttypes.h>
 #include <assert.h>
 #include <sys/types.h>
 #include <fcntl.h>
@@ -45,7 +46,6 @@ typedef SSIZE_T ssize_t;
 
 typedef uint8_t		uchar;
 typedef uint32_t	uint;
-typedef uint64_t	ulong;
 #include "param.h"
 
 #define MIN(A, B)	(((A) < (B)) ? (A) : (B))
@@ -637,8 +637,8 @@ void print_sol(uint32_t *values, uint64_t *nonce)
 	show_n_sols = MIN(10, show_n_sols);
     fprintf(stderr, "Soln:");
     // for brievity, only print "small" nonces
-    if (*nonce < (1UL << 32))
-	fprintf(stderr, " 0x%lx:", *nonce);
+    if (*nonce < (1ULL << 32))
+	fprintf(stderr, " 0x%" PRIx64 ":", *nonce);
     for (unsigned i = 0; i < show_n_sols; i++)
 	fprintf(stderr, " %x", values[i]);
     fprintf(stderr, "%s\n", (show_n_sols != (1 << PARAM_K) ? "..." : ""));
@@ -1125,12 +1125,14 @@ void mining_mode(cl_context ctx, cl_command_queue queue,
     uint64_t		status_period = 500e3; // time (usec) between statuses
     puts("SILENTARMY mining mode ready");
     fflush(stdout);
+    
 #ifdef WIN32
 	TIMEVAL t;
 	gettimeofday(&t1, NULL);
 	srand(t.tv_usec * t.tv_sec);
 	SetConsoleOutputCP(65001);
 #endif
+
     for (i = 0; ; i++)
       {
         // iteration #0 always reads a job or else there is nothing to do
@@ -1148,7 +1150,7 @@ void mining_mode(cl_context ctx, cl_command_queue queue,
         if ((t1 = now()) > t0 + status_period)
           {
             t0 = t1;
-            printf("status: %ld %ld\n", total, total_shares);
+            printf("status: %" PRId64 " %" PRId64 "\n", total, total_shares);
             fflush(stdout);
           }
       }
@@ -1190,7 +1192,7 @@ void run_opencl(uint8_t *header, size_t header_len, cl_context ctx,
 		buf_sols, buf_dbg, dbg_size, header, header_len, nonce,
 		0, NULL, NULL, NULL);
     uint64_t t1 = now();
-    fprintf(stderr, "Total %ld solutions in %.1f ms (%.1f Sol/s)\n",
+    fprintf(stderr, "Total %" PRId64 " solutions in %.1f ms (%.1f Sol/s)\n",
 	    total, (t1 - t0) / 1e3, total / ((t1 - t0) / 1e6));
     // Clean up
     if (dbg)
@@ -1511,6 +1513,8 @@ int main(int argc, char **argv)
                 break ;
           }
     tests();
+    if (mining)
+	puts("SILENTARMY mining mode ready"), fflush(stdout);
     header_len = parse_header(header, sizeof (header), hex_header);
     init_and_run_opencl(header, header_len);
     return 0;

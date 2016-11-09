@@ -227,7 +227,7 @@ void kernel_round0(__global ulong *blake_state, __global char *ht,
         // mix in length of data
         v[12] ^= ZCASH_BLOCK_HEADER_LEN + 4 /* length of "i" */;
         // last block
-        v[14] ^= -1;
+        v[14] ^= (ulong)-1;
 
         // round 1
         mix(v[0], v[4], v[8],  v[12], 0, word1);
@@ -422,8 +422,9 @@ ulong half_aligned_long(__global ulong *p, uint offset)
 /*
 ** Access a well-aligned int.
 */
-uint well_aligned_int(__global char *p, uint offset)
+uint well_aligned_int(__global ulong *_p, uint offset)
 {
+    __global char *p = (__global char *)_p;
     return *(__global uint *)(p + offset);
 }
 
