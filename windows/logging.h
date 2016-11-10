@@ -11,8 +11,6 @@
 
 #define min(a,b) ((a)<(b)?(a):(b))
 
-void exit(int);
-
 extern uint16_t verbose;
 
 typedef struct  debug_s

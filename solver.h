@@ -4,7 +4,7 @@
 #include "param.h"
 #include "CL\opencl.h"
 
-typedef struct solver_context_s {
+struct solver_context_t {
 	cl_context ctx;
 	cl_program program;
 	cl_command_queue queue;
@@ -16,18 +16,17 @@ typedef struct solver_context_s {
 	cl_mem buf_dbg;
 	size_t dbg_size;
 	void* buf_dbg_helper;
-} solver_context_t;
+};
 
-solver_context_t setup_context(int gpu_to_use, bool mining);
+void scan_platforms(int gpuToUse, cl_platform_id *plat_id, cl_device_id *dev_id);
 
-void destroy_context(solver_context_t self);
+void setup_context(solver_context_t& self, int gpu_to_use);
 
-uint32_t solve_equihash(
-	bool mining,
-	solver_context_t self,
-	uint8_t *header, size_t header_len, uint64_t nonce,
-	size_t fixed_nonce_bytes, uint8_t *target, char *job_id,
-	uint32_t *shares);
+void destroy_context(solver_context_t& self);
+
+sols_t* solve_equihash(solver_context_t self, uint8_t *header, size_t header_len);
+
+uint32_t verify_sol(sols_t *sols, unsigned sol_i);
 
 cl_mem check_clCreateBuffer(cl_context ctx, cl_mem_flags flags, size_t size, void *host_ptr);
 

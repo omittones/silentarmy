@@ -5,7 +5,7 @@
 #include <string.h>
 #include <inttypes.h>
 
-#define min(a,b) ((a)>(b)?(b):(a))
+uint16_t verbose = 0;
 
 void examine_dbg(cl_command_queue queue, cl_mem buf_dbg, size_t dbg_size)
 {

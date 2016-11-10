@@ -86,8 +86,10 @@ unsigned scan_platform(
 		else if (*nr_devs_total == selectGpu)
 		{
 			found = 1;
-			*plat_id = plat;
-			*dev_id = devices[i];
+			if (plat_id != nullptr && dev_id != nullptr) {
+				*plat_id = plat;
+				*dev_id = devices[i];
+			}
 			break;
 		}
 		(*nr_devs_total)++;
@@ -106,7 +108,7 @@ unsigned scan_platform(
 */
 void scan_platforms(
 	int gpuToUse,
-	cl_platform_id *plat_id, 
+	cl_platform_id *plat_id,
 	cl_device_id *dev_id)
 {
 	cl_uint		nr_platforms;
@@ -118,7 +120,7 @@ void scan_platforms(
 		fatal("Cannot get OpenCL platforms (%d)\n", status);
 	if (!nr_platforms)
 		fatal("Did not find any OpenCL platforms.");
-	
+
 	debug("Found %d OpenCL platform(s)\n", nr_platforms);
 	platforms = (cl_platform_id *)malloc(nr_platforms * sizeof(*platforms));
 	if (!platforms)
@@ -129,11 +131,12 @@ void scan_platforms(
 	i = nr_devs_total = 0;
 	while (i < nr_platforms)
 	{
-		if (scan_platform(gpuToUse, platforms[i], &nr_devs_total, plat_id, dev_id))
+		if (scan_platform(gpuToUse, platforms[i], &nr_devs_total, plat_id, dev_id)) {
+			debug("Using GPU device ID %d\n", gpuToUse);
 			break;
+		}
 		i++;
 	}
-	debug("Using GPU device ID %d\n", gpuToUse);
 	free(platforms);
 }
 
@@ -195,6 +198,7 @@ uint32_t verify_sol(sols_t *sols, unsigned sol_i)
 	for (uint32_t level = 0; level < PARAM_K; level++)
 		for (i = 0; i < (1 << PARAM_K); i += (2 << level))
 			sort_pair(&inputs[i], 1 << level);
+
 	return 1;
 }
 
@@ -406,57 +410,18 @@ void show_program_build_log(cl_program program, cl_device_id device)
 **
 ** Return the number of solutions found.
 */
-uint32_t solve_equihash(
-	bool mining,
-	solver_context_t self,
-	uint8_t *header, size_t header_len, uint64_t nonce,
-	size_t fixed_nonce_bytes, uint8_t *target, char *job_id,
-	uint32_t *shares)
+sols_t* solve_equihash(solver_context_t self, uint8_t *header, size_t header_len)
 {
 	blake2b_state_t     blake;
 	cl_mem              buf_blake_st;
-	size_t		global_ws;
+	size_t				global_ws;
 	size_t              local_work_size = 64;
-	uint32_t		sol_found = 0;
-	uint64_t		*nonce_ptr;
+	uint32_t			sol_found = 0;
 
-	if (mining)
-	{
-		// mining mode must specify full header
-		assert(header_len == ZCASH_BLOCK_HEADER_LEN);
-		assert(target && job_id);
-	}
-	else
-		assert(header_len == ZCASH_BLOCK_HEADER_LEN ||
-			header_len == ZCASH_BLOCK_HEADER_LEN - ZCASH_NONCE_LEN);
-	
-	nonce_ptr = (uint64_t *)(header + ZCASH_BLOCK_HEADER_LEN - ZCASH_NONCE_LEN);
-	// add the nonce. if (header_len == ZCASH_BLOCK_HEADER_LEN) the full
-	// header is preserved between calls to solve_equihash(), so we can just
-	// increment by 1, else 'nonce' is used to construct the 32-byte nonce.
-
-	if (mining)
-	{
-		// increment bytes 17-19
-		(*(uint32_t *)((uint8_t *)nonce_ptr + 17))++;
-		// byte 20 and above must be zero
-		*(uint32_t *)((uint8_t *)nonce_ptr + 20) = 0;
-	}
-	else
-	{
-		if (header_len == ZCASH_BLOCK_HEADER_LEN - ZCASH_NONCE_LEN)
-		{
-			memset(nonce_ptr, 0, ZCASH_NONCE_LEN);
-			// add the nonce
-			*nonce_ptr += nonce;
-		}
-		else
-			(*nonce_ptr)++;
-	}
-	
-	debug("\nSolving nonce %s\n", s_hexdump(nonce_ptr, ZCASH_NONCE_LEN));
-
-	// Process first BLAKE2b-400 block
+	//assert full header
+	assert(header_len == ZCASH_BLOCK_HEADER_LEN);
+		
+	//process first BLAKE2b-400 block
 	zcash_blake2b_init(&blake, ZCASH_HASH_LEN, PARAM_N, PARAM_K);
 	zcash_blake2b_update(&blake, header, 128, 0);
 	buf_blake_st = check_clCreateBuffer(self.ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(blake.h), &blake.h);
@@ -495,10 +460,30 @@ uint32_t solve_equihash(
 	global_ws = NR_ROWS;
 	check_clEnqueueNDRangeKernel(self.queue, self.k_sols, 1, NULL,
 		&global_ws, &local_work_size, 0, NULL, NULL);
-	sol_found = verify_sols(mining, self.queue, self.buf_sols, nonce_ptr, header,
-		fixed_nonce_bytes, target, job_id, shares);
+	
+	sols_t	*sols;
+	uint32_t	nr_valid_sols;
+	sols = (sols_t *)malloc(sizeof(*sols));
+	if (!sols)
+		fatal("malloc: %s\n", strerror(errno));
+	check_clEnqueueReadBuffer(self.queue, self.buf_sols, 
+		CL_TRUE,	// cl_bool	blocking_read
+		0,		// size_t	offset
+		sizeof(*sols),	// size_t	size
+		sols,	// void		*ptr
+		0,		// cl_uint	num_events_in_wait_list
+		NULL,	// cl_event	*event_wait_list
+		NULL);	// cl_event	*event
+
+	if (sols->nr > MAX_SOLS)
+	{
+		debug("%d (probably invalid) solutions were dropped!\n", sols->nr - MAX_SOLS);
+		sols->nr = MAX_SOLS;
+	}
+
 	clReleaseMemObject(buf_blake_st);
-	return sol_found;
+
+	return sols;	
 }
 
 void __stdcall error_callback(
@@ -510,9 +495,8 @@ void __stdcall error_callback(
 	warn("ERROR: %s", errinfo);
 }
 
-solver_context_t setup_context(int gpu_to_use, bool mining) {
+ void setup_context(solver_context_t& self, int gpu_to_use) {
 
-	solver_context_t self;
 	self.buf_dbg_helper = NULL;
 
 	cl_platform_id	plat_id = 0;
@@ -590,11 +574,9 @@ solver_context_t setup_context(int gpu_to_use, bool mining) {
 	self.buf_ht[0] = check_clCreateBuffer(self.ctx, CL_MEM_READ_WRITE, HT_SIZE, NULL);
 	self.buf_ht[1] = check_clCreateBuffer(self.ctx, CL_MEM_READ_WRITE, HT_SIZE, NULL);
 	self.buf_sols = check_clCreateBuffer(self.ctx, CL_MEM_READ_WRITE, sizeof(sols_t), NULL);
-
-	return self;
 }
 
-void destroy_context(solver_context_t self) {
+void destroy_context(solver_context_t& self) {
 
 	// Clean up
 	if (self.buf_dbg_helper)
