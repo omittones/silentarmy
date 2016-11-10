@@ -117,7 +117,7 @@ void scan_platforms(
 	cl_int		status;
 	status = clGetPlatformIDs(0, NULL, &nr_platforms);
 	if (status != CL_SUCCESS)
-		fatal("Cannot get OpenCL platforms (%d)\n", status);
+		fatal("Cannot get OpenCL platforms (%s)\n", clGetErrorString(status));
 	if (!nr_platforms)
 		fatal("Did not find any OpenCL platforms.");
 
