@@ -7,41 +7,6 @@
 
 uint16_t verbose = 0;
 
-void examine_dbg(cl_command_queue queue, cl_mem buf_dbg, size_t dbg_size)
-{
-	debug_t     *dbg;
-	size_t      dropped_coll_total, dropped_stor_total;
-	if (verbose < 2)
-		return;
-	dbg = (debug_t *)malloc(dbg_size);
-	if (!dbg)
-		fatal("malloc: %s\n", strerror(errno));
-	auto status = clEnqueueReadBuffer(queue, buf_dbg,
-		CL_TRUE,	// cl_bool	blocking_read
-		0,		// size_t	offset
-		dbg_size,   // size_t	size
-		dbg,	// void		*ptr
-		0,		// cl_uint	num_events_in_wait_list
-		NULL,	// cl_event	*event_wait_list
-		NULL);	// cl_event	*event
-	if (status != CL_SUCCESS) {
-		fatal("examine_dbg failed! (%d)", status);
-	}
-
-	dropped_coll_total = dropped_stor_total = 0;
-	for (unsigned tid = 0; tid < dbg_size / sizeof(*dbg); tid++)
-	{
-		dropped_coll_total += dbg[tid].dropped_coll;
-		dropped_stor_total += dbg[tid].dropped_stor;
-		if (0 && (dbg[tid].dropped_coll || dbg[tid].dropped_stor))
-			debug("thread %6d: dropped_coll %zd dropped_stor %zd\n", tid,
-				dbg[tid].dropped_coll, dbg[tid].dropped_stor);
-	}
-	debug("Dropped: %zd (coll) %zd (stor)\n",
-		dropped_coll_total, dropped_stor_total);
-	free(dbg);
-}
-
 /*
 ** Write ZCASH_SOL_LEN bytes representing the encoded solution as per the
 ** Zcash protocol specs (512 x 21-bit inputs).
@@ -236,7 +201,7 @@ uint32_t print_sols(sols_t *all_sols, uint64_t *nonce, uint32_t nr_valid_sols,
 	return shares;
 }
 
-#ifdef ENABLE_DEBUG
+#ifdef _DEBUG
 
 uint32_t has_i(uint32_t round, uint8_t *ht, uint32_t row, uint32_t i,
 	uint32_t mask, uint32_t *res)
@@ -275,6 +240,41 @@ uint32_t has_xi(uint32_t round, uint8_t *ht, uint32_t row, uint32_t xi,
 		}
 	}
 	return 0;
+}
+
+void examine_dbg(cl_command_queue queue, cl_mem buf_dbg, size_t dbg_size)
+{
+	debug_t     *dbg;
+	size_t      dropped_coll_total, dropped_stor_total;
+	if (verbose < 2)
+		return;
+	dbg = (debug_t *)malloc(dbg_size);
+	if (!dbg)
+		fatal("malloc: %s\n", strerror(errno));
+	auto status = clEnqueueReadBuffer(queue, buf_dbg,
+		CL_TRUE,	// cl_bool	blocking_read
+		0,		// size_t	offset
+		dbg_size,   // size_t	size
+		dbg,	// void		*ptr
+		0,		// cl_uint	num_events_in_wait_list
+		NULL,	// cl_event	*event_wait_list
+		NULL);	// cl_event	*event
+	if (status != CL_SUCCESS) {
+		fatal("examine_dbg failed! (%d)", status);
+	}
+
+	dropped_coll_total = dropped_stor_total = 0;
+	for (unsigned tid = 0; tid < dbg_size / sizeof(*dbg); tid++)
+	{
+		dropped_coll_total += dbg[tid].dropped_coll;
+		dropped_stor_total += dbg[tid].dropped_stor;
+		if (0 && (dbg[tid].dropped_coll || dbg[tid].dropped_stor))
+			debug("thread %6d: dropped_coll %zd dropped_stor %zd\n", tid,
+				dbg[tid].dropped_coll, dbg[tid].dropped_stor);
+	}
+	debug("Dropped: %zd (coll) %zd (stor)\n",
+		dropped_coll_total, dropped_stor_total);
+	free(dbg);
 }
 
 void examine_ht(unsigned round, cl_command_queue queue, cl_mem buf_ht)
@@ -381,12 +381,5 @@ void examine_ht(unsigned round, cl_command_queue queue, cl_mem buf_ht)
 		}
 	}
 	free(ht);
-}
-#else
-inline void examine_ht(unsigned round, cl_command_queue queue, cl_mem buf_ht)
-{
-	(void)round;
-	(void)queue;
-	(void)buf_ht;
 }
 #endif

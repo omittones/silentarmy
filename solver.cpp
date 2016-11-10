@@ -251,7 +251,7 @@ cl_mem check_clCreateBuffer(cl_context ctx, cl_mem_flags flags, size_t size,
 	cl_mem	ret;
 	ret = clCreateBuffer(ctx, flags, size, host_ptr, &status);
 	if (status != CL_SUCCESS || !ret)
-		fatal("clCreateBuffer (%d)\n", status);
+		fatal("clCreateBuffer (%s)\n", clGetErrorString(status));
 	return ret;
 }
 
@@ -260,7 +260,7 @@ void check_clSetKernelArg(cl_kernel k, cl_uint a_pos, cl_mem *a)
 	cl_int	status;
 	status = clSetKernelArg(k, a_pos, sizeof(*a), a);
 	if (status != CL_SUCCESS)
-		fatal("clSetKernelArg (%d)\n", status);
+		fatal("clSetKernelArg (%s)\n", clGetErrorString(status));
 }
 
 void check_clEnqueueNDRangeKernel(cl_command_queue queue, cl_kernel k, cl_uint
@@ -274,7 +274,7 @@ void check_clEnqueueNDRangeKernel(cl_command_queue queue, cl_kernel k, cl_uint
 		global_work_size, local_work_size, num_events_in_wait_list,
 		event_wait_list, event);
 	if (status != CL_SUCCESS)
-		fatal("clEnqueueNDRangeKernel (%d)\n", status);
+		fatal("clEnqueueNDRangeKernel (%s)\n", clGetErrorString(status));
 }
 
 void check_clEnqueueReadBuffer(cl_command_queue queue, cl_mem buffer, cl_bool
@@ -286,7 +286,7 @@ void check_clEnqueueReadBuffer(cl_command_queue queue, cl_mem buffer, cl_bool
 	status = clEnqueueReadBuffer(queue, buffer, blocking_read, offset,
 		size, ptr, num_events_in_wait_list, event_wait_list, event);
 	if (status != CL_SUCCESS)
-		fatal("clEnqueueReadBuffer (%d)\n", status);
+		fatal("clEnqueueReadBuffer (%s)\n", clGetErrorString(status));
 }
 
 unsigned nr_compute_units(const char *gpu)
@@ -377,18 +377,20 @@ void load_file(const char *fname, char **dat, size_t *dat_len)
 
 void show_program_build_log(cl_program program, cl_device_id device)
 {
-	char	    val[2 * 1024 * 1024];
-	size_t		ret = 0;
+	size_t capacity = 2 * 1024 * 1024;
+	size_t total = 0;
+	char* buffer = (char*)malloc(capacity);
+	if (buffer == nullptr)
+		fatal("malloc: show_program_build_log");
 
-	auto status = clGetProgramBuildInfo(program, device, CL_PROGRAM_BUILD_LOG,
-		sizeof(val),	// size_t param_value_size
-		&val,		// void *param_value
-		&ret);		// size_t *param_value_size_ret
-	
+	auto status = clGetProgramBuildInfo(program, device, CL_PROGRAM_BUILD_LOG, capacity, buffer, &total);
+	buffer[total] = 0;
 	if (status != CL_SUCCESS)
-		fatal("clGetProgramBuildInfo (%d)\n", status);
+		fatal("clGetProgramBuildInfo (%s)\n", clGetErrorString(status));
 
-	fprintf(stderr, "%s\n", val);
+	fprintf(stderr, "%s\n", buffer);
+
+	free(buffer);
 }
 
 /*
@@ -451,9 +453,13 @@ sols_t* solve_equihash(solver_context_t self, uint8_t *header, size_t header_len
 			check_clSetKernelArg(self.k_rounds[round], 3, &self.buf_sols);
 		check_clEnqueueNDRangeKernel(self.queue, self.k_rounds[round], 1, NULL,
 			&global_ws, &local_work_size, 0, NULL, NULL);
+
+#if _DEBUG
 		examine_ht(round, self.queue, self.buf_ht[round % 2]);
 		examine_dbg(self.queue, self.buf_dbg, self.dbg_size);
+#endif
 	}
+
 	check_clSetKernelArg(self.k_sols, 0, &self.buf_ht[0]);
 	check_clSetKernelArg(self.k_sols, 1, &self.buf_ht[1]);
 	check_clSetKernelArg(self.k_sols, 2, &self.buf_sols);
@@ -532,8 +538,14 @@ void __stdcall error_callback(
 	/* Build program. */
 	debug("Building program\n");
 
-	status = clBuildProgram(self.program, 1, &dev_id, "-I .. -I . -cl-std=CL2.0", // compile options
-		NULL, NULL);
+	// Optional features
+#ifdef _DEBUG
+	auto opts = "-D _DEBUG -I .. -I . -cl-std=CL2.0";
+#else
+	auto opts = "-I .. -I . -cl-std=CL2.0";
+#endif
+
+	status = clBuildProgram(self.program, 1, &dev_id, opts, NULL, NULL);
 	if (status != CL_SUCCESS)
 	{
 		warn("OpenCL build failed (%s). Build log follows:\n", clGetErrorString(status));
@@ -558,7 +570,7 @@ void __stdcall error_callback(
 	if (status != CL_SUCCESS || !self.k_sols)
 		fatal("clCreateKernel (%d)\n", status);
 
-#ifdef ENABLE_DEBUG
+#ifdef _DEBUG
 	self.dbg_size = NR_ROWS * sizeof(debug_t);
 #else
 	self.dbg_size = 1 * sizeof(debug_t);

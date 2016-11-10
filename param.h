@@ -68,9 +68,6 @@
 // Length of SHA256 target
 #define SHA256_TARGET_LEN               (256 / 8)
 
-// Optional features
-#define ENABLE_DEBUG
-
 /*
 ** Return the offset of Xi in bytes from the beginning of the slot.
 */
