@@ -12,10 +12,8 @@
 #include "solver.h"
 #include "windows\logging.h"
 #include "windows\crossplatform.h"
-
-#define _CC
 #include "blake.hpp"
-#undef _CC
+#include "clErrors.h"
 
 void print_platform_info(cl_platform_id plat)
 {
@@ -236,9 +234,7 @@ uint32_t verify_sols(
 	if (shares)
 		*shares = sh;
 	if (!mining || verbose)
-		fprintf(stderr, "Nonce %s: %d sol%s\n",
-			s_hexdump(nonce, ZCASH_NONCE_LEN), nr_valid_sols,
-			nr_valid_sols == 1 ? "" : "s");
+		fprintf(stderr, "Nonce %s: %d sol%s\n", s_hexdump(nonce, ZCASH_NONCE_LEN), nr_valid_sols, nr_valid_sols == 1 ? "" : "s");
 	debug("Stats: %d likely invalids\n", sols->likely_invalids);
 	free(sols);
 	return nr_valid_sols;
@@ -375,18 +371,19 @@ void load_file(const char *fname, char **dat, size_t *dat_len)
 	(*dat)[*dat_len] = 0;
 }
 
-void get_program_build_log(cl_program program, cl_device_id device)
+void show_program_build_log(cl_program program, cl_device_id device)
 {
-	cl_int		status;
-	char	        val[2 * 1024 * 1024];
+	char	    val[2 * 1024 * 1024];
 	size_t		ret = 0;
-	status = clGetProgramBuildInfo(program, device,
-		CL_PROGRAM_BUILD_LOG,
+
+	auto status = clGetProgramBuildInfo(program, device, CL_PROGRAM_BUILD_LOG,
 		sizeof(val),	// size_t param_value_size
 		&val,		// void *param_value
 		&ret);		// size_t *param_value_size_ret
+	
 	if (status != CL_SUCCESS)
 		fatal("clGetProgramBuildInfo (%d)\n", status);
+
 	fprintf(stderr, "%s\n", val);
 }
 
@@ -462,8 +459,7 @@ uint32_t solve_equihash(
 	// Process first BLAKE2b-400 block
 	zcash_blake2b_init(&blake, ZCASH_HASH_LEN, PARAM_N, PARAM_K);
 	zcash_blake2b_update(&blake, header, 128, 0);
-	buf_blake_st = check_clCreateBuffer(self.ctx, CL_MEM_READ_ONLY |
-		CL_MEM_COPY_HOST_PTR, sizeof(blake.h), &blake.h);
+	buf_blake_st = check_clCreateBuffer(self.ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(blake.h), &blake.h);
 	for (unsigned round = 0; round < PARAM_K; round++)
 	{
 		if (verbose > 1)
@@ -521,7 +517,7 @@ solver_context_t setup_context(int gpu_to_use, bool mining) {
 
 	cl_platform_id	plat_id = 0;
 	cl_device_id	dev_id = 0;
-	cl_int		status;
+	cl_int			status;
 	scan_platforms(gpu_to_use, &plat_id, &dev_id);
 	if (!plat_id || !dev_id)
 		fatal("Selected device (ID %d) not found; see --list\n", gpu_to_use);
@@ -535,7 +531,7 @@ solver_context_t setup_context(int gpu_to_use, bool mining) {
 	self.queue = clCreateCommandQueue(self.ctx, dev_id, 0, &status);
 	if (status != CL_SUCCESS || !self.queue)
 		fatal("clCreateCommandQueue (%d)\n", status);
-	
+
 	/* Create program object */
 	char *source;
 	size_t source_len;
@@ -547,19 +543,21 @@ solver_context_t setup_context(int gpu_to_use, bool mining) {
 	source_len = strlen(source);
 	self.program = clCreateProgramWithSource(self.ctx, 1, (const char **)&source, &source_len, &status);
 	if (status != CL_SUCCESS || !self.program)
-		fatal("clCreateProgramWithSource (%d)\n", status);
+		fatal("clCreateProgramWithSource (%d)\n", clGetErrorString(status));
+
 	/* Build program. */
-	if (!mining || verbose)
-		fprintf(stderr, "Building program\n");
-	status = clBuildProgram(self.program, 1, &dev_id, "-I .. -I .", // compile options
+	debug("Building program\n");
+
+	status = clBuildProgram(self.program, 1, &dev_id, "-I .. -I . -cl-std=CL2.0", // compile options
 		NULL, NULL);
 	if (status != CL_SUCCESS)
 	{
-		warn("OpenCL build failed (%d). Build log follows:\n", status);
-		get_program_build_log(self.program, dev_id);
+		warn("OpenCL build failed (%s). Build log follows:\n", clGetErrorString(status));
+		show_program_build_log(self.program, dev_id);
 		exit(1);
 	}
 	//get_program_bins(program);
+
 	// Create kernel objects
 	self.k_init_ht = clCreateKernel(self.program, "kernel_init_ht", &status);
 	if (status != CL_SUCCESS || !self.k_init_ht)
@@ -582,17 +580,16 @@ solver_context_t setup_context(int gpu_to_use, bool mining) {
 	self.dbg_size = 1 * sizeof(debug_t);
 #endif
 
-	if (!mining || verbose)
-		fprintf(stderr, "Hash tables will use %.1f MB\n", 2.0 * HT_SIZE / 1e6);
+	debug("Hash tables will use %.1f MB\n", 2.0 * HT_SIZE / 1e6);
+
 	// Set up buffers for the host and memory objects for the kernel
 	if (!(self.buf_dbg_helper = calloc(self.dbg_size, 1)))
 		fatal("malloc: %s\n", strerror(errno));
-	self.buf_dbg = check_clCreateBuffer(self.ctx, CL_MEM_READ_WRITE |
-		CL_MEM_COPY_HOST_PTR, self.dbg_size, self.buf_dbg_helper);
+
+	self.buf_dbg = check_clCreateBuffer(self.ctx, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, self.dbg_size, self.buf_dbg_helper);
 	self.buf_ht[0] = check_clCreateBuffer(self.ctx, CL_MEM_READ_WRITE, HT_SIZE, NULL);
 	self.buf_ht[1] = check_clCreateBuffer(self.ctx, CL_MEM_READ_WRITE, HT_SIZE, NULL);
-	self.buf_sols = check_clCreateBuffer(self.ctx, CL_MEM_READ_WRITE, sizeof(sols_t),
-		NULL);
+	self.buf_sols = check_clCreateBuffer(self.ctx, CL_MEM_READ_WRITE, sizeof(sols_t), NULL);
 
 	return self;
 }

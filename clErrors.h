@@ -2,7 +2,7 @@
 
 #include "CL/opencl.h"
 
-inline const char * clErrorString(cl_int error)
+inline const char * clGetErrorString(cl_int error)
 {
 	switch (error)
 	{
