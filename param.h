@@ -76,10 +76,10 @@
 // An (uncompressed) solution stores (1 << PARAM_K) 32-bit values
 #define SOL_SIZE			((1 << PARAM_K) * 4)
 
-struct sols_t
+typedef struct sols_s
 {
     unsigned int nr;
 	unsigned int likely_invalids;
     unsigned char valid[MAX_SOLS];
 	unsigned int values[MAX_SOLS][(1 << PARAM_K)];
-};
+} sols_t;
