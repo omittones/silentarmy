@@ -84,7 +84,7 @@ uint ht_store(uint round, __global char *ht, uint i,
     __global char       *p;
     uint                cnt;
 #if NR_ROWS_LOG == 16
-    if (!(round % 2))
+    if (!(round & 1))
 	row = (xi0 & 0xffff);
     else
 	// if we have in hex: "ab cd ef..." (little endian xi0) then this
@@ -94,21 +94,21 @@ uint ht_store(uint round, __global char *ht, uint i,
 	row = ((xi0 & 0xf00) << 4) | ((xi0 & 0xf00000) >> 12) |
 	    ((xi0 & 0xf) << 4) | ((xi0 & 0xf000) >> 12);
 #elif NR_ROWS_LOG == 18
-    if (!(round % 2))
+    if (!(round & 1))
 	row = (xi0 & 0xffff) | ((xi0 & 0xc00000) >> 6);
     else
 	row = ((xi0 & 0xc0000) >> 2) |
 	    ((xi0 & 0xf00) << 4) | ((xi0 & 0xf00000) >> 12) |
 	    ((xi0 & 0xf) << 4) | ((xi0 & 0xf000) >> 12);
 #elif NR_ROWS_LOG == 19
-    if (!(round % 2))
+    if (!(round & 1))
 	row = (xi0 & 0xffff) | ((xi0 & 0xe00000) >> 5);
     else
 	row = ((xi0 & 0xe0000) >> 1) |
 	    ((xi0 & 0xf00) << 4) | ((xi0 & 0xf00000) >> 12) |
 	    ((xi0 & 0xf) << 4) | ((xi0 & 0xf000) >> 12);
 #elif NR_ROWS_LOG == 20
-    if (!(round % 2))
+    if (!(round & 1))
 	row = (xi0 & 0xffff) | ((xi0 & 0xf00000) >> 4);
     else
 	row = ((xi0 & 0xf0000) >> 0) |
@@ -367,7 +367,7 @@ void kernel_round0(__global ulong *blake_state, __global char *ht,
 
         input++;
       }
-#ifdef ENABLE_DEBUG
+#ifdef _DEBUG
     debug[tid * 2] = 0;
     debug[tid * 2 + 1] = dropped;
 #endif
@@ -542,11 +542,11 @@ void equihash_round(uint round, __global char *ht_src, __global char *ht_dst,
     xi_offset = xi_offset_for_round(round - 1);
     // the mask is also computed to read data from the previous round
 #if NR_ROWS_LOG == 16
-    mask = ((!(round % 2)) ? 0x0f : 0xf0);
+    mask = ((!(round & 1)) ? 0x0f : 0xf0);
 #elif NR_ROWS_LOG == 18
-    mask = ((!(round % 2)) ? 0x03 : 0x30);
+    mask = ((!(round & 1)) ? 0x03 : 0x30);
 #elif NR_ROWS_LOG == 19
-    mask = ((!(round % 2)) ? 0x01 : 0x10);
+    mask = ((!(round & 1)) ? 0x01 : 0x10);
 #elif NR_ROWS_LOG == 20
     mask = 0; /* we can vastly simplify the code below */
 #else
@@ -599,7 +599,7 @@ void equihash_round(uint round, __global char *ht_src, __global char *ht_dst,
     if (round < 8)
 	// reset the counter in preparation of the next round
 	*(__global uint *)(ht_src + tid * NR_SLOTS * SLOT_LEN) = 0;
-#ifdef ENABLE_DEBUG
+#ifdef _DEBUG
     debug[tid * 2] = dropped_coll;
     debug[tid * 2 + 1] = dropped_stor;
 #endif
@@ -636,8 +636,7 @@ void kernel_round8(__global char *ht_src, __global char *ht_dst,
 
 uint expand_ref(__global char *ht, uint xi_offset, uint row, uint slot)
 {
-    return *(__global uint *)(ht + row * NR_SLOTS * SLOT_LEN +
-	    slot * SLOT_LEN + xi_offset - 4);
+    return *(__global uint *)(ht + row * NR_SLOTS * SLOT_LEN + slot * SLOT_LEN + xi_offset - 4);
 }
 
 /*
@@ -645,34 +644,25 @@ uint expand_ref(__global char *ht, uint xi_offset, uint row, uint slot)
 ** or 0 otherwise (an invalid solution would be a solution with duplicate
 ** inputs, which can be detected at the last step: round == 0).
 */
-uint expand_refs(uint *ins, uint nr_inputs, __global char **htabs,
+void expand_refs(__global uint *ins, uint nr_inputs, __global char **htabs,
 	uint round)
 {
-    __global char	*ht = htabs[round % 2];
+    __global char	*ht = htabs[round & 1];
     uint		i = nr_inputs - 1;
     uint		j = nr_inputs * 2 - 1;
     uint		xi_offset = xi_offset_for_round(round);
-    int			dup_to_watch = -1;
     do
       {
 	ins[j] = expand_ref(ht, xi_offset,
 		DECODE_ROW(ins[i]), DECODE_SLOT1(ins[i]));
 	ins[j - 1] = expand_ref(ht, xi_offset,
 		DECODE_ROW(ins[i]), DECODE_SLOT0(ins[i]));
-	if (!round)
-	  {
-	    if (dup_to_watch == -1)
-		dup_to_watch = ins[j];
-	    else if (ins[j] == dup_to_watch || ins[j - 1] == dup_to_watch)
-		return 0;
-	  }
 	if (!i)
 	    break ;
 	i--;
 	j -= 2;
       }
     while (1);
-    return 1;
 }
 
 /*
@@ -681,28 +671,23 @@ uint expand_refs(uint *ins, uint nr_inputs, __global char **htabs,
 void potential_sol(__global char **htabs, __global sols_t *sols,
 	uint ref0, uint ref1)
 {
-    uint	nr_values;
-    uint	values_tmp[(1 << PARAM_K)];
     uint	sol_i;
-    uint	i;
+    uint	nr_values;
+    sol_i = atomic_inc(&sols->nr);
+    if (sol_i >= MAX_SOLS)
+	return ;
+    sols->valid[sol_i] = 0;
     nr_values = 0;
-    values_tmp[nr_values++] = ref0;
-    values_tmp[nr_values++] = ref1;
+    sols->values[sol_i][nr_values++] = ref0;
+    sols->values[sol_i][nr_values++] = ref1;
     uint round = PARAM_K - 1;
     do
       {
 	round--;
-	if (!expand_refs(values_tmp, nr_values, htabs, round))
-	    return ;
+	expand_refs(&(sols->values[sol_i][0]), nr_values, htabs, round);
 	nr_values *= 2;
       }
     while (round > 0);
-    // solution appears valid, copy it to sols
-    sol_i = atomic_inc(&sols->nr);
-    if (sol_i >= MAX_SOLS)
-	return ;
-    for (i = 0; i < (1 << PARAM_K); i++)
-	sols->values[sol_i][i] = values_tmp[i];
     sols->valid[sol_i] = 1;
 }
 
@@ -714,7 +699,7 @@ void kernel_sols(__global char *ht0, __global char *ht1, __global sols_t *sols)
 {
     uint		tid = get_global_id(0);
     __global char	*htabs[2] = { ht0, ht1 };
-    uint		ht_i = (PARAM_K - 1) % 2; // table filled at last round
+    uint		ht_i = (PARAM_K - 1) & 1; // table filled at last round
     uint		cnt;
     uint		xi_offset = xi_offset_for_round(PARAM_K - 1);
     uint		i, j;
@@ -722,7 +707,7 @@ void kernel_sols(__global char *ht0, __global char *ht1, __global sols_t *sols)
     uint		ref_i, ref_j;
     // it's ok for the collisions array to be so small, as if it fills up
     // the potential solutions are likely invalid (many duplicate inputs)
-    ulong		collisions[1];
+    ulong		collisions[5];
     uint		coll;
 #if NR_ROWS_LOG >= 16 && NR_ROWS_LOG <= 20
     // in the final hash table, we are looking for a match on both the bits
