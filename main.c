@@ -528,32 +528,34 @@ size_t select_work_size_blake(void)
 	return work_size;
 }
 
-void init_ht(cl_command_queue queue, cl_kernel k_init_ht, cl_mem buf_ht)
+void init_ht(cl_command_queue queue, cl_kernel k_init_ht, cl_mem buf_ht,
+	cl_mem rowCounters)
 {
-	size_t      global_ws = NR_ROWS;
-	size_t      local_ws = 64;
-	cl_int      status;
+    size_t      global_ws = NR_ROWS / ROWS_PER_UINT;
+    size_t      local_ws = 256;
+    cl_int      status;
 #if 0
-	uint32_t    pat = -1;
-	status = clEnqueueFillBuffer(queue, buf_ht, &pat, sizeof(pat), 0,
-		NR_ROWS * NR_SLOTS * SLOT_LEN,
-		0,    // cl_uint  num_events_in_wait_list
-		NULL, // cl_event *event_wait_list
-		NULL);   // cl_event *event
-	if (status != CL_SUCCESS)
-		fatal("clEnqueueFillBuffer (%d)\n", status);
+    uint32_t    pat = -1;
+    status = clEnqueueFillBuffer(queue, buf_ht, &pat, sizeof (pat), 0,
+	    NR_ROWS * NR_SLOTS * SLOT_LEN,
+	    0,		// cl_uint	num_events_in_wait_list
+	    NULL,	// cl_event	*event_wait_list
+	    NULL);	// cl_event	*event
+    if (status != CL_SUCCESS)
+	fatal("clEnqueueFillBuffer (%d)\n", status);
 #endif
-	status = clSetKernelArg(k_init_ht, 0, sizeof(buf_ht), &buf_ht);
-	if (status != CL_SUCCESS)
-		fatal("clSetKernelArg (%d)\n", status);
-	check_clEnqueueNDRangeKernel(queue, k_init_ht,
-		1,    // cl_uint  work_dim
-		NULL, // size_t   *global_work_offset
-		&global_ws, // size_t   *global_work_size
-		&local_ws,  // size_t   *local_work_size
-		0,    // cl_uint  num_events_in_wait_list
-		NULL, // cl_event *event_wait_list
-		NULL);   // cl_event *event
+    status = clSetKernelArg(k_init_ht, 0, sizeof (buf_ht), &buf_ht);
+    clSetKernelArg(k_init_ht, 1, sizeof (rowCounters), &rowCounters);
+    if (status != CL_SUCCESS)
+	fatal("clSetKernelArg (%d)\n", status);
+    check_clEnqueueNDRangeKernel(queue, k_init_ht,
+	    1,		// cl_uint	work_dim
+	    NULL,	// size_t	*global_work_offset
+	    &global_ws,	// size_t	*global_work_size
+	    &local_ws,	// size_t	*local_work_size
+	    0,		// cl_uint	num_events_in_wait_list
+	    NULL,	// cl_event	*event_wait_list
+	    NULL);	// cl_event	*event
 }
 
 /*
@@ -871,17 +873,16 @@ void __stdcall error_callback(
 	warn("ERROR: %s", errinfo);
 }
 
+unsigned get_value(unsigned *data, unsigned row)
+{
+    return data[row];
+}
+
 /*
 ** Attempt to find Equihash solutions for the given Zcash block header and
-** nonce. The 'header' passed in argument is either:
-**
-** - a 140-byte full header specifying the nonce, or
-** - a 108-byte nonceless header, implying a nonce of 32 zero bytes
-**
-** In both cases the function constructs the full block header to solve by
-** adding the value of 'nonce' to the nonce in 'header'. This allows
-** repeatedly calling this fuction while changing only the value of 'nonce'
-** to attempt different Equihash problems.
+** nonce. The 'header' passed in argument is a 140-byte header specifying
+** the nonce, which this function may auto-increment if 'do_increment'. This
+** allows repeatedly calling this fuction to solve different Equihash problems.
 **
 ** header   must be a buffer allocated with ZCASH_BLOCK_HEADER_LEN bytes
 ** header_len  number of bytes initialized in header (either 140 or 108)
@@ -905,51 +906,55 @@ sols_t* solve_equihash(
 	//assert full header
 	assert(header_len == ZCASH_BLOCK_HEADER_LEN);
 
-	//process first BLAKE2b-400 block
-	zcash_blake2b_init(&blake, ZCASH_HASH_LEN, PARAM_N, PARAM_K);
-	zcash_blake2b_update(&blake, header, 128, 0);
-	buf_blake_st = check_clCreateBuffer(self.ctx, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(blake.h), &blake.h);
-	for (unsigned round = 0; round < PARAM_K; round++)
-	{
-		if (verbose > 1)
-			debug("Round %d\n", round);
+	// Process first BLAKE2b-400 block
+    zcash_blake2b_init(&blake, ZCASH_HASH_LEN, PARAM_N, PARAM_K);
+    zcash_blake2b_update(&blake, header, 128, 0);
+    buf_blake_st = check_clCreateBuffer(ctx, CL_MEM_READ_ONLY |
+	    CL_MEM_COPY_HOST_PTR, sizeof (blake.h), &blake.h);
+    for (unsigned round = 0; round < PARAM_K; round++)
+      {
+	if (verbose > 1)
+	    debug("Round %d\n", round);
+	// Now on every round!!!!
+	init_ht(queue, k_init_ht, buf_ht[round % 2], rowCounters[round % 2]);
+	if (!round)
+	  {
+	    check_clSetKernelArg(k_rounds[round], 0, &buf_blake_st);
+	    check_clSetKernelArg(k_rounds[round], 1, &buf_ht[round % 2]);
+	    check_clSetKernelArg(k_rounds[round], 2, &rowCounters[round % 2]);
+	    global_ws = select_work_size_blake();
+	  }
+	else
+	  {
+	    check_clSetKernelArg(k_rounds[round], 0, &buf_ht[(round - 1) % 2]);
+	    check_clSetKernelArg(k_rounds[round], 1, &buf_ht[round % 2]);
+	    check_clSetKernelArg(k_rounds[round], 2, &rowCounters[(round - 1) % 2]);
+	    check_clSetKernelArg(k_rounds[round], 3, &rowCounters[round % 2]);
+	    global_ws = NR_ROWS;
+	  }
+	check_clSetKernelArg(k_rounds[round], round == 0 ? 3 : 4, &buf_dbg);
+	if (round == PARAM_K - 1)
+	    check_clSetKernelArg(k_rounds[round], 5, &buf_sols);
+	check_clEnqueueNDRangeKernel(queue, k_rounds[round], 1, NULL,
+		&global_ws, &local_work_size, 0, NULL, NULL);
+	examine_ht(round, queue, buf_ht[round % 2]);
+	examine_dbg(queue, buf_dbg, dbg_size);
+      }
+    check_clSetKernelArg(k_sols, 0, &buf_ht[0]);
+    check_clSetKernelArg(k_sols, 1, &buf_ht[1]);
+    check_clSetKernelArg(k_sols, 2, &buf_sols);
+    check_clSetKernelArg(k_sols, 3, &rowCounters[0]);
+    check_clSetKernelArg(k_sols, 4, &rowCounters[1]);
+    global_ws = NR_ROWS;
+    check_clEnqueueNDRangeKernel(queue, k_sols, 1, NULL,
+	    &global_ws, &local_work_size, 0, NULL, NULL);
+    sol_found = verify_sols(queue, buf_sols, nonce_ptr, header,
+	    fixed_nonce_bytes, target, job_id, shares);
+    clReleaseMemObject(buf_blake_st);
+    return sol_found;
 
-		if (round < 2) {
-			init_ht(self.queue, self.k_init_ht, self.buf_ht[round % 2]);
-		}
 
-		if (!round)
-		{
-			check_clSetKernelArg(self.k_rounds[round], 0, &buf_blake_st);
-			check_clSetKernelArg(self.k_rounds[round], 1, &self.buf_ht[round % 2]);
-			global_work_size = select_work_size_blake();
-		}
-		else
-		{
-			check_clSetKernelArg(self.k_rounds[round], 0, &self.buf_ht[(round - 1) % 2]);
-			check_clSetKernelArg(self.k_rounds[round], 1, &self.buf_ht[round % 2]);
-			global_work_size = NR_ROWS;
-		}
-		check_clSetKernelArg(self.k_rounds[round], 2, &self.buf_dbg);
-		if (round == PARAM_K - 1)
-			check_clSetKernelArg(self.k_rounds[round], 3, &self.buf_sols);
-		check_clEnqueueNDRangeKernel(self.queue, self.k_rounds[round], 1, NULL,
-			&global_work_size, &local_work_size, 0, NULL, NULL);
-
-#if _DEBUG
-		examine_ht(round, self.queue, self.buf_ht[round % 2]);
-		examine_dbg(self.queue, self.buf_dbg, self.dbg_size);
-#endif
-	}
-
-	check_clSetKernelArg(self.k_sols, 0, &self.buf_ht[0]);
-	check_clSetKernelArg(self.k_sols, 1, &self.buf_ht[1]);
-	check_clSetKernelArg(self.k_sols, 2, &self.buf_sols);
-	global_work_size = NR_ROWS;
-	check_clEnqueueNDRangeKernel(self.queue, self.k_sols, 1, NULL,
-		&global_work_size, &local_work_size, 0, NULL, NULL);
-
-	sols_t   *sols;
+    sols_t   *sols;
 	uint32_t nr_valid_sols;
 	sols = (sols_t *)malloc(sizeof(*sols));
 	if (!sols)
@@ -1076,38 +1081,38 @@ void mining_parse_job(char *str, uint8_t *target, size_t target_len,
 	char *job_id, size_t job_id_len, uint8_t *header, size_t header_len,
 	size_t *fixed_nonce_bytes)
 {
-	uint32_t		str_i, i;
-	// parse target
-	str_i = 0;
-	for (i = 0; i < target_len; i++, str_i += 2)
-		target[i] = hex2val(str, str_i) * 16 + hex2val(str, str_i + 1);
-	assert(str[str_i] == ' ');
-	str_i++;
-	// parse job_id
-	for (i = 0; i < job_id_len && str[str_i] != ' '; i++, str_i++)
-		job_id[i] = str[str_i];
-	assert(str[str_i] == ' ');
-	assert(i < job_id_len);
-	job_id[i] = 0;
-	str_i++;
-	// parse header and nonce_leftpart
-	for (i = 0; i < header_len && str[str_i] != ' '; i++, str_i += 2)
-		header[i] = hex2val(str, str_i) * 16 + hex2val(str, str_i + 1);
-	assert(str[str_i] == ' ');
-	str_i++;
-	*fixed_nonce_bytes = 0;
-	while (i < header_len && str[str_i] && str[str_i] != '\n')
-	{
-		header[i] = hex2val(str, str_i) * 16 + hex2val(str, str_i + 1);
-		i++;
-		str_i += 2;
-		(*fixed_nonce_bytes)++;
-	}
-	assert(!str[str_i]);
-	// Randomize rest of the bytes except N_ZERO_BYTES bytes which must be zero
-	debug("Randomizing %d bytes in nonce\n", header_len - N_ZERO_BYTES - i);
-	randomize(header + i, header_len - N_ZERO_BYTES - i);
-	memset(header + header_len - N_ZERO_BYTES, 0, N_ZERO_BYTES);
+    uint32_t		str_i, i;
+    // parse target
+    str_i = 0;
+    for (i = 0; i < target_len; i++, str_i += 2)
+	target[i] = hex2val(str, str_i) * 16 + hex2val(str, str_i + 1);
+    assert(str[str_i] == ' ');
+    str_i++;
+    // parse job_id
+    for (i = 0; i < job_id_len && str[str_i] != ' '; i++, str_i++)
+	job_id[i] = str[str_i];
+    assert(str[str_i] == ' ');
+    assert(i < job_id_len);
+    job_id[i] = 0;
+    str_i++;
+    // parse header and nonce_leftpart
+    for (i = 0; i < header_len && str[str_i] != ' '; i++, str_i += 2)
+	header[i] = hex2val(str, str_i) * 16 + hex2val(str, str_i + 1);
+    assert(str[str_i] == ' ');
+    str_i++;
+    *fixed_nonce_bytes = 0;
+    while (i < header_len && str[str_i])
+      {
+	header[i] = hex2val(str, str_i) * 16 + hex2val(str, str_i + 1);
+	i++;
+	str_i += 2;
+       	(*fixed_nonce_bytes)++;
+      }
+    assert(!str[str_i]);
+    // Randomize rest of the bytes except N_ZERO_BYTES bytes which must be zero
+    debug("Randomizing %d bytes in nonce\n", header_len - N_ZERO_BYTES - i);
+    randomize(header + i, header_len - N_ZERO_BYTES - i);
+    memset(header + header_len - N_ZERO_BYTES, 0, N_ZERO_BYTES);
 }
 
 /*
@@ -1251,10 +1256,12 @@ void setup_context(solver_context_t& self, cl_device_id devId) {
 	if (status != CL_SUCCESS || !k_sols)
 		fatal("clCreateKernel (%d)\n", status);
 
+	cl_mem              buf_ht[2], buf_sols, buf_dbg, rowCounters[2];
+    void                *dbg = NULL;
 #ifdef _DEBUG
-	self.dbg_size = NR_ROWS * sizeof(debug_t);
+    size_t              dbg_size = NR_ROWS * sizeof (debug_t);
 #else
-	self.dbg_size = 1 * sizeof(debug_t);
+    size_t              dbg_size = 1 * sizeof (debug_t);
 #endif
 
 	debug("Hash tables will use %.1f MB\n", 2.0 * HT_SIZE / 1e6);
@@ -1274,6 +1281,9 @@ void setup_context(solver_context_t& self, cl_device_id devId) {
 	self.buf_ht[0] = check_clCreateBuffer(self.ctx, CL_MEM_READ_WRITE, HT_SIZE, NULL);
 	self.buf_ht[1] = check_clCreateBuffer(self.ctx, CL_MEM_READ_WRITE, HT_SIZE, NULL);
 	self.buf_sols = check_clCreateBuffer(self.ctx, CL_MEM_READ_WRITE, sizeof(sols_t), NULL);
+    self.buf_sols = check_clCreateBuffer(ctx, CL_MEM_READ_WRITE, sizeof (sols_t), NULL);
+    self.rowCounters[0] = check_clCreateBuffer(ctx, CL_MEM_READ_WRITE, NR_ROWS, NULL);
+    self.rowCounters[1] = check_clCreateBuffer(ctx, CL_MEM_READ_WRITE, NR_ROWS, NULL);
 }
 
 void destroy_context(solver_context_t& self) {
@@ -1286,6 +1296,8 @@ void destroy_context(solver_context_t& self) {
 	clReleaseMemObject(self.buf_sols);
 	clReleaseMemObject(self.buf_ht[0]);
 	clReleaseMemObject(self.buf_ht[1]);
+	self.rowCounters[0] = check_clCreateBuffer(ctx, CL_MEM_READ_WRITE, NR_ROWS, NULL);
+    self.rowCounters[1] = check_clCreateBuffer(ctx, CL_MEM_READ_WRITE, NR_ROWS, NULL);
 
 	// Release resources
 	assert(CL_SUCCESS == 0);
