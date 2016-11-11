@@ -7,11 +7,11 @@
 #include <Winsock2.h>
 #include <io.h>
 #include <BaseTsd.h>
-#include "gettimeofday.h"
-#include "getopt.h"
+#include "windows/gettimeofday.h"
+#include "windows/getopt.h"
 
 #define _GNU_SOURCE	1/* memrchr */
-#include "memrchr.h"
+#include "windows/memrchr.h"
 
 typedef SSIZE_T ssize_t;
 

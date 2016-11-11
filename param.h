@@ -1,3 +1,7 @@
+#pragma once
+
+#include <stdint.h>
+
 #define PARAM_N				200
 #define PARAM_K				9
 #define PREFIX                          (PARAM_N / (PARAM_K + 1))
@@ -66,9 +70,6 @@
 // Length of SHA256 target
 #define SHA256_TARGET_LEN               (256 / 8)
 
-// Optional features
-#undef ENABLE_DEBUG
-
 /*
 ** Return the offset of Xi in bytes from the beginning of the slot.
 */
@@ -76,7 +77,8 @@
 
 // An (uncompressed) solution stores (1 << PARAM_K) 32-bit values
 #define SOL_SIZE			((1 << PARAM_K) * 4)
-typedef struct sols_t
+
+struct sols_t
 {
     uint32_t	nr;
     uint32_t	likely_invalids;

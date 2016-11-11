@@ -8,8 +8,8 @@
 #include <chrono>
 #include <iostream>
 #include "CL/opencl.h"
-#include "../sha256.h"
-#include "../param.h"
+#include "sha256.h"
+#include "param.h"
 
 #define min(a,b) ((a)<(b)?(a):(b))
 
@@ -20,6 +20,14 @@ typedef struct  debug_s
 	uint32_t    dropped_coll;
 	uint32_t    dropped_stor;
 }               debug_t;
+
+void debug(const char *fmt, ...);
+
+void warn(const char *fmt, ...);
+
+void fatal(const char *fmt, ...);
+
+char *s_hexdump(const void *_a, uint32_t a_len);
 
 void examine_ht(unsigned round, cl_command_queue queue, cl_mem buf_ht);
 
