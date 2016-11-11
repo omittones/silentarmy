@@ -1,3 +1,5 @@
+#include <stdint.h>
+
 typedef struct  blake2b_state_s
 {
     uint64_t    h[8];

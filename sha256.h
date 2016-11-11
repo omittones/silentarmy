@@ -7,6 +7,8 @@
 
 #define SHA256_DIGEST_SIZE 32
 
+#include <stdint.h>
+
 typedef struct
 {
   uint32_t state[8];

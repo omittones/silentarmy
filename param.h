@@ -1,7 +1,5 @@
 #pragma once
 
-#include <stdint.h>
-
 #define PARAM_N				200
 #define PARAM_K				9
 #define PREFIX                          (PARAM_N / (PARAM_K + 1))
@@ -80,8 +78,8 @@
 
 struct sols_t
 {
-    uint32_t	nr;
-    uint32_t	likely_invalids;
-    uint8_t		valid[MAX_SOLS];
-    uint32_t	values[MAX_SOLS][(1 << PARAM_K)];
+    unsigned int nr;
+	unsigned int likely_invalids;
+    unsigned char valid[MAX_SOLS];
+	unsigned int values[MAX_SOLS][(1 << PARAM_K)];
 };
