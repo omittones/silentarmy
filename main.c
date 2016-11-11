@@ -24,6 +24,17 @@
 #include <sys/time.h>
 #include <sys/types.h>
 
+#ifdef WIN32
+#include "windows/gettimeofday.h"
+#include "windows/getopt.h"
+#include "windows/memrchr.h"
+#define open _open
+#define read _read
+#define write _write
+#define close _close
+#define snprintf _snprintf
+#endif
+
 uint16_t verbose = 0;
 uint32_t	show_encoded = 0;
 uint64_t	nr_nonces = 1;
@@ -82,17 +93,21 @@ void show_time(uint64_t t0)
     fprintf(stderr, "Elapsed time: %.1f msec\n", (t1 - t0) / 1e3);
 }
 
+#ifndef WIN32
 void set_blocking_mode(int fd, int block)
 {
-    int		f;
+
+	int	f;
     if (-1 == (f = fcntl(fd, F_GETFL)))
 	fatal("fcntl F_GETFL: %s\n", strerror(errno));
     if (-1 == fcntl(fd, F_SETFL, block ? (f & ~O_NONBLOCK) : (f | O_NONBLOCK)))
-	fatal("fcntl F_SETFL: %s\n", strerror(errno));
+		fatal("fcntl F_SETFL: %s\n", strerror(errno));
 }
+#endif
 
 void randomize(void *p, ssize_t l)
 {
+#ifndef WIN32
     const char	*fname = "/dev/urandom";
     int		fd;
     ssize_t	ret;
@@ -104,6 +119,10 @@ void randomize(void *p, ssize_t l)
 	fatal("%s: short read %d bytes out of %d\n", fname, ret, l);
     if (-1 == close(fd))
 	fatal("close %s: %s\n", fname, strerror(errno));
+#else
+	for (int i = 0; i < l; i++)
+		((uint8_t *)p)[i] = rand() & 0xff;
+#endif
 }
 
 cl_mem check_clCreateBuffer(cl_context ctx, cl_mem_flags flags, size_t size,
@@ -182,7 +201,7 @@ uint8_t hex2val(const char *base, size_t off)
     if (c >= '0' && c <= '9')           return c - '0';
     else if (c >= 'a' && c <= 'f')      return 10 + c - 'a';
     else if (c >= 'A' && c <= 'F')      return 10 + c - 'A';
-    fatal("Invalid hex char at offset %zd: ...%c...\n", off, c);
+    fatal("Invalid hex char at offset %d: ...%d...\n", off, c);
     return 0;
 }
 
@@ -773,6 +792,9 @@ void sort_pair(uint32_t *a, uint32_t len)
 ** If solution is invalid return 0. If solution is valid, sort the inputs
 ** and return 1.
 */
+
+#define SEEN_LEN (1 << (PREFIX + 1)) / 8
+
 uint32_t verify_sol(sols_t *sols, unsigned sol_i)
 {
    uint32_t *inputs = sols->values[sol_i];
@@ -979,30 +1001,52 @@ int read_last_line(char *buf, size_t len, int block)
     char	*start;
     size_t	pos = 0;
     ssize_t	n;
+#ifndef WIN32
     set_blocking_mode(0, block);
-    while (42)
+#endif
+	while (42)
       {
-	n = read(0, buf + pos, len - pos);
-	if (n == -1 && errno == EINTR)
-	    continue ;
-	else if (n == -1 && (errno == EAGAIN || errno == EWOULDBLOCK))
-	  {
-	    if (!pos)
-		return 0;
-	    warn("strange: a partial line was read\n");
-	    // a partial line was read, continue reading it in blocking mode
-	    // to be sure to read it completely
-	    set_blocking_mode(0, 1);
-	    continue ;
-	  }
-	else if (n == -1)
-	    fatal("read stdin: %s\n", strerror(errno));
-	else if (!n)
-	    fatal("EOF on stdin\n");
-	pos += n;
-	if (buf[pos - 1] == '\n')
-	    // 1 (or more) complete lines were read
-	    break ;
+#ifndef WIN32
+		n = read(0, buf + pos, len - pos);
+		if (n == -1 && errno == EINTR)
+			continue ;
+		else if (n == -1 && (errno == EAGAIN || errno == EWOULDBLOCK))
+			{
+			if (!pos)
+			return 0;
+			warn("strange: a partial line was read\n");
+			// a partial line was read, continue reading it in blocking mode
+			// to be sure to read it completely
+			set_blocking_mode(0, 1);
+			continue ;
+			}
+		else if (n == -1)
+			fatal("read stdin: %s\n", strerror(errno));
+		else if (!n)
+			fatal("EOF on stdin\n");
+		pos += n;
+
+		if (buf[pos - 1] == '\n')
+			// 1 (or more) complete lines were read
+			break;
+#else
+		  DWORD bytesAvailable = 0;
+		  HANDLE stdinHandle = GetStdHandle(STD_INPUT_HANDLE);
+		  PeekNamedPipe(stdinHandle, NULL, 0, NULL, &bytesAvailable, NULL);
+		  if (bytesAvailable > 0) {
+			  
+			  if (!ReadFile(stdinHandle, buf, bytesAvailable, &bytesAvailable, NULL)) {
+				  fatal("ReadFile: %d", GetLastError());
+			  }
+			  pos += bytesAvailable;
+		  }
+		  else {
+			  return 0;
+		  }
+		  if (buf[pos - 1] == '\n')
+			  // 1 (or more) complete lines were read
+			  break;
+#endif
       }
     start = memrchr(buf, '\n', pos - 1);
     if (start)
@@ -1013,6 +1057,7 @@ int read_last_line(char *buf, size_t len, int block)
 	memmove(buf, start + 1, pos);
       }
     // overwrite '\n' with NUL
+
     buf[pos - 1] = 0;
     return 1;
 }
@@ -1063,7 +1108,7 @@ void mining_parse_job(char *str, uint8_t *target, size_t target_len,
     assert(str[str_i] == ' ');
     str_i++;
     *fixed_nonce_bytes = 0;
-    while (i < header_len && str[str_i])
+	while (i < header_len && str[str_i] && str[str_i] != '\n')
       {
 	header[i] = hex2val(str, str_i) * 16 + hex2val(str, str_i + 1);
 	i++;
@@ -1095,9 +1140,19 @@ void mining_mode(cl_context ctx, cl_command_queue queue,
     uint64_t		total_shares = 0;
     uint64_t		t0 = 0, t1;
     uint64_t		status_period = 500e3; // time (usec) between statuses
+    fflush(stdout);
+    
+#ifdef WIN32
+	TIMEVAL t;
+	gettimeofday(&t1, NULL);
+	srand(t.tv_usec * t.tv_sec);
+	SetConsoleOutputCP(65001);
+#endif
+
     for (i = 0; ; i++)
       {
         // iteration #0 always reads a job or else there is nothing to do
+
         if (read_last_line(line, sizeof (line), !i))
             mining_parse_job(line,
                     target, sizeof (target),
@@ -1202,66 +1257,65 @@ std::vector<platform_t> scan_platforms()
 
 void setup_context(solver_context_t& self, cl_device_id devId) {
 
-   self.buf_dbg_helper = NULL;
-   cl_int status;
-
-   /* Create context.*/
-   self.ctx = clCreateContext(NULL, 1, &devId, &error_callback, &self, &status);
-   if (status != CL_SUCCESS || !self.ctx)
-      fatal("clCreateContext (%d)\n", status);
-
-   /* Creating command queue associate with the context.*/
-   self.queue = clCreateCommandQueue(self.ctx, devId, 0, &status);
-   if (status != CL_SUCCESS || !self.queue)
-      fatal("clCreateCommandQueue (%d)\n", status);
-
-   /* Create program object */
-   char *source;
-   size_t source_len;
+    cl_platform_id	plat_id = 0;
+    cl_device_id	dev_id = 0;
+    cl_kernel		k_rounds[PARAM_K];
+    cl_int		status;
+    scan_platforms(&plat_id, &dev_id);
+    if (!plat_id || !dev_id)
+	fatal("Selected device (ID %d) not found; see --list\n", gpu_to_use);
+    /* Create context.*/
+    cl_context context = clCreateContext(NULL, 1, &dev_id,
+	    NULL, NULL, &status);
+    if (status != CL_SUCCESS || !context)
+	fatal("clCreateContext (%d)\n", status);
+    /* Creating command queue associate with the context.*/
+    cl_command_queue queue = clCreateCommandQueue(context, dev_id,
+	    0, &status);
+    if (status != CL_SUCCESS || !queue)
+	fatal("clCreateCommandQueue (%d)\n", status);
+    /* Create program object */
+    cl_program program;
+    const char *source;
+    size_t source_len;
 #ifdef WIN32
-   load_file("input.cl", &source, &source_len);
+    load_file("input.cl", &source, &source_len);
 #else
-   source = ocl_code;
+	source = ocl_code;
 #endif
-   source_len = strlen(source);
-   self.program = clCreateProgramWithSource(self.ctx, 1, (const char **)&source, &source_len, &status);
-   if (status != CL_SUCCESS || !self.program)
-      fatal("clCreateProgramWithSource (%d)\n", clGetErrorString(status));
-
-   /* Build program. */
-   debug("Building program\n");
-
-   // Optional features
-#ifdef _DEBUG
-   auto opts = "-D _DEBUG -I .. -I . -cl-std=CL2.0";
-#else
-   auto opts = "-I .. -I . -cl-std=CL2.0";
-#endif
-
-   status = clBuildProgram(self.program, 1, &devId, opts, NULL, NULL);
-   if (status != CL_SUCCESS)
-   {
-      warn("OpenCL build failed (%s). Build log follows:\n", clGetErrorString(status));
-      show_program_build_log(self.program, devId);
-      exit(1);
-   }
-   //get_program_bins(program);
-
-   // Create kernel objects
-   self.k_init_ht = clCreateKernel(self.program, "kernel_init_ht", &status);
-   if (status != CL_SUCCESS || !self.k_init_ht)
-      fatal("clCreateKernel (%d)\n", status);
-   for (unsigned round = 0; round < PARAM_K; round++)
-   {
-      char  name[128];
-      snprintf(name, sizeof(name), "kernel_round%d", round);
-      self.k_rounds[round] = clCreateKernel(self.program, name, &status);
-      if (status != CL_SUCCESS || !self.k_rounds[round])
-         fatal("clCreateKernel (%d)\n", status);
-   }
-   self.k_sols = clCreateKernel(self.program, "kernel_sols", &status);
-   if (status != CL_SUCCESS || !self.k_sols)
-      fatal("clCreateKernel (%d)\n", status);
+	source_len = strlen(source);
+    program = clCreateProgramWithSource(context, 1, (const char **)&source,
+	    &source_len, &status);
+    if (status != CL_SUCCESS || !program)
+	fatal("clCreateProgramWithSource (%d)\n", status);
+    /* Build program. */
+    if (!mining || verbose)
+	fprintf(stderr, "Building program\n");
+    status = clBuildProgram(program, 1, &dev_id,
+	    "-I .. -I .", // compile options
+	    NULL, NULL);
+    if (status != CL_SUCCESS)
+      {
+        warn("OpenCL build failed (%d). Build log follows:\n", status);
+        get_program_build_log(program, dev_id);
+	exit(1);
+      }
+    //get_program_bins(program);
+    // Create kernel objects
+    cl_kernel k_init_ht = clCreateKernel(program, "kernel_init_ht", &status);
+    if (status != CL_SUCCESS || !k_init_ht)
+	fatal("clCreateKernel (%d)\n", status);
+    for (unsigned round = 0; round < PARAM_K; round++)
+      {
+	char	name[128];
+	snprintf(name, sizeof (name), "kernel_round%d", round);
+	k_rounds[round] = clCreateKernel(program, name, &status);
+	if (status != CL_SUCCESS || !k_rounds[round])
+	    fatal("clCreateKernel (%d)\n", status);
+      }
+    cl_kernel k_sols = clCreateKernel(program, "kernel_sols", &status);
+    if (status != CL_SUCCESS || !k_sols)
+	fatal("clCreateKernel (%d)\n", status);
 
 #ifdef _DEBUG
    self.dbg_size = NR_ROWS * sizeof(debug_t);
@@ -1275,6 +1329,10 @@ void setup_context(solver_context_t& self, cl_device_id devId) {
    if (!(self.buf_dbg_helper = calloc(self.dbg_size, 1)))
       fatal("malloc: %s\n", strerror(errno));
 
+
+   //TODO - init self
+
+      
    self.buf_dbg = check_clCreateBuffer(self.ctx, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, self.dbg_size, self.buf_dbg_helper);
    self.buf_ht[0] = check_clCreateBuffer(self.ctx, CL_MEM_READ_WRITE, HT_SIZE, NULL);
    self.buf_ht[1] = check_clCreateBuffer(self.ctx, CL_MEM_READ_WRITE, HT_SIZE, NULL);
@@ -1303,7 +1361,7 @@ void destroy_context(solver_context_t& self) {
    status |= clReleaseCommandQueue(self.queue);
    status |= clReleaseContext(self.ctx);
    if (status)
-      fprintf(stderr, "Cleaning resources failed\n");
+   fprintf(stderr, "Cleaning resources failed\n");
 }
 
 uint32_t parse_header(uint8_t *h, size_t h_len, const char *hex)
