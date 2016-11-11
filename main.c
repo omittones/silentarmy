@@ -13,7 +13,6 @@
 #include <CL/cl.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <getopt.h>
 #include <inttypes.h>
 #include <stdarg.h>
 #include <stdbool.h>
