@@ -38,6 +38,7 @@ struct solver_context_t {
 	cl_kernel k_rounds[PARAM_K];
 	cl_kernel k_sols;
 	cl_mem buf_ht[2];
+	cl_mem rowCounters[2];
 	cl_mem buf_sols;
 	cl_mem buf_dbg;
 	size_t dbg_size;
@@ -52,7 +53,7 @@ void destroy_context(solver_context_t& self);
 
 sols_t* solve_equihash(solver_context_t self, size_t noThreadsPerBlock,	uint8_t *header, size_t header_len);
 
-uint32_t verify_sol(sols_t *sols, unsigned sol_i);
+bool verify_sol(sols_t *sols, unsigned sol_i);
 
 cl_mem check_clCreateBuffer(cl_context ctx, cl_mem_flags flags, size_t size, void *host_ptr);
 

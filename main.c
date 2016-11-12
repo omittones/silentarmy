@@ -113,7 +113,7 @@ void randomize(void *p, ssize_t l)
 #endif
 }
 
-cl_mem check_clCreateBuffer(cl_context ctx, cl_mem_flags flags, size_t size,
+cl_mem check_clCreateBuffer(cl_context ctx, cl_mem_flags flags, size_t size, 
 	void *host_ptr)
 {
 	cl_int   status;
@@ -178,7 +178,7 @@ inline char *s_hexdump(const void *_a, uint32_t a_len)
 	static char    buf[4096];
 	uint32_t    i;
 	for (i = 0; i < a_len && i + 2 < sizeof(buf); i++)
-		sprintf(buf + i * 2, "%02x", a[i]);
+		sprintf_s(buf + i * 2, 4096, "%02x", a[i]);
 	buf[i * 2] = 0;
 	return buf;
 }
@@ -785,7 +785,7 @@ void sort_pair(uint32_t *a, uint32_t len)
 
 #define SEEN_LEN (1 << (PREFIX + 1)) / 8
 
-uint32_t verify_sol(sols_t *sols, unsigned sol_i)
+bool verify_sol(sols_t *sols, unsigned sol_i)
 {
 	uint32_t *inputs = sols->values[sol_i];
 	//uint32_t  seen_len = (1 << (PREFIX + 1)) / 8;
@@ -801,7 +801,7 @@ uint32_t verify_sol(sols_t *sols, unsigned sol_i)
 		{
 			warn("Invalid input retrieved from device: %d\n", inputs[i]);
 			sols->valid[sol_i] = 0;
-			return 0;
+			return false;
 		}
 		tmp = seen[inputs[i] / 8];
 		seen[inputs[i] / 8] |= 1 << (inputs[i] & 7);
@@ -809,7 +809,7 @@ uint32_t verify_sol(sols_t *sols, unsigned sol_i)
 		{
 			// at least one input value is a duplicate
 			sols->valid[sol_i] = 0;
-			return 0;
+			return false;
 		}
 	}
 	// the valid flag is already set by the GPU, but set it again because
@@ -819,49 +819,7 @@ uint32_t verify_sol(sols_t *sols, unsigned sol_i)
 	for (uint32_t level = 0; level < PARAM_K; level++)
 		for (i = 0; i < (1 << PARAM_K); i += (2 << level))
 			sort_pair(&inputs[i], 1 << level);
-	return 1;
-}
-
-/*
-** Return the number of valid solutions.
-*/
-uint32_t verify_sols(
-	bool mining,
-	cl_command_queue queue, cl_mem buf_sols, uint64_t *nonce,
-	uint8_t *header, size_t fixed_nonce_bytes, uint8_t *target,
-	char *job_id, uint32_t *shares)
-{
-	sols_t   *sols;
-	uint32_t nr_valid_sols;
-	sols = (sols_t *)malloc(sizeof(*sols));
-	if (!sols)
-		fatal("malloc: %s\n", strerror(errno));
-	check_clEnqueueReadBuffer(queue, buf_sols,
-		CL_TRUE, // cl_bool  blocking_read
-		0,    // size_t   offset
-		sizeof(*sols), // size_t   size
-		sols, // void     *ptr
-		0,    // cl_uint  num_events_in_wait_list
-		NULL, // cl_event *event_wait_list
-		NULL);   // cl_event *event
-	if (sols->nr > MAX_SOLS)
-	{
-		fprintf(stderr, "%d (probably invalid) solutions were dropped!\n",
-			sols->nr - MAX_SOLS);
-		sols->nr = MAX_SOLS;
-	}
-	nr_valid_sols = 0;
-	for (unsigned sol_i = 0; sol_i < sols->nr; sol_i++)
-		nr_valid_sols += verify_sol(sols, sol_i);
-	uint32_t sh = print_sols(sols, nonce, nr_valid_sols, header,
-		fixed_nonce_bytes, target, job_id);
-	if (shares)
-		*shares = sh;
-	if (!mining || verbose)
-		fprintf(stderr, "Nonce %s: %d sol%s\n", s_hexdump(nonce, ZCASH_NONCE_LEN), nr_valid_sols, nr_valid_sols == 1 ? "" : "s");
-	debug("Stats: %d likely invalids\n", sols->likely_invalids);
-	free(sols);
-	return nr_valid_sols;
+	return true;
 }
 
 void __stdcall error_callback(
@@ -871,11 +829,6 @@ void __stdcall error_callback(
 	void *user_data) {
 
 	warn("ERROR: %s", errinfo);
-}
-
-unsigned get_value(unsigned *data, unsigned row)
-{
-    return data[row];
 }
 
 /*
@@ -897,15 +850,24 @@ sols_t* solve_equihash(
 	uint8_t *header,
 	size_t header_len)
 {
+	auto ctx = self.ctx;
+	auto queue = self.queue;
+	auto k_init_ht = self.k_init_ht;
+	auto buf_ht = self.buf_ht;
+	auto rowCounters = self.rowCounters;
+	auto k_rounds = self.k_rounds;
+	auto k_sols = self.k_sols;
+	auto buf_sols = self.buf_sols;
+	
 	blake2b_state_t blake;
 	cl_mem buf_blake_st;
-	size_t global_work_size;
-	size_t local_work_size = max(noThreadsPerBlock, 1);
+	size_t global_ws;
+	size_t local_ws = max(noThreadsPerBlock, 1);
 	uint32_t sol_found = 0;
 
 	//assert full header
 	assert(header_len == ZCASH_BLOCK_HEADER_LEN);
-
+	
 	// Process first BLAKE2b-400 block
     zcash_blake2b_init(&blake, ZCASH_HASH_LEN, PARAM_N, PARAM_K);
     zcash_blake2b_update(&blake, header, 128, 0);
@@ -932,13 +894,16 @@ sols_t* solve_equihash(
 	    check_clSetKernelArg(k_rounds[round], 3, &rowCounters[round % 2]);
 	    global_ws = NR_ROWS;
 	  }
-	check_clSetKernelArg(k_rounds[round], round == 0 ? 3 : 4, &buf_dbg);
+	check_clSetKernelArg(k_rounds[round], round == 0 ? 3 : 4, &self.buf_dbg);
 	if (round == PARAM_K - 1)
 	    check_clSetKernelArg(k_rounds[round], 5, &buf_sols);
 	check_clEnqueueNDRangeKernel(queue, k_rounds[round], 1, NULL,
-		&global_ws, &local_work_size, 0, NULL, NULL);
+		&global_ws, &local_ws, 0, NULL, NULL);
+
+#if _DEBUG
 	examine_ht(round, queue, buf_ht[round % 2]);
-	examine_dbg(queue, buf_dbg, dbg_size);
+	examine_dbg(queue, self.buf_dbg, self.dbg_size);
+#endif
       }
     check_clSetKernelArg(k_sols, 0, &buf_ht[0]);
     check_clSetKernelArg(k_sols, 1, &buf_ht[1]);
@@ -947,13 +912,8 @@ sols_t* solve_equihash(
     check_clSetKernelArg(k_sols, 4, &rowCounters[1]);
     global_ws = NR_ROWS;
     check_clEnqueueNDRangeKernel(queue, k_sols, 1, NULL,
-	    &global_ws, &local_work_size, 0, NULL, NULL);
-    sol_found = verify_sols(queue, buf_sols, nonce_ptr, header,
-	    fixed_nonce_bytes, target, job_id, shares);
-    clReleaseMemObject(buf_blake_st);
-    return sol_found;
-
-
+	    &global_ws, &local_ws, 0, NULL, NULL);
+    
     sols_t   *sols;
 	uint32_t nr_valid_sols;
 	sols = (sols_t *)malloc(sizeof(*sols));
@@ -975,7 +935,7 @@ sols_t* solve_equihash(
 	}
 
 	clReleaseMemObject(buf_blake_st);
-
+	
 	return sols;
 }
 
@@ -1199,9 +1159,8 @@ std::vector<platform_t> scan_platforms()
 
 void setup_context(solver_context_t& self, cl_device_id devId) {
 
-	cl_kernel		k_rounds[PARAM_K];
-	cl_int		status;
-	scan_platforms();
+	cl_kernel k_rounds[PARAM_K];
+	cl_int status;
 
 	/* Create context.*/
 	cl_context context = clCreateContext(NULL, 1, &devId,
@@ -1256,12 +1215,11 @@ void setup_context(solver_context_t& self, cl_device_id devId) {
 	if (status != CL_SUCCESS || !k_sols)
 		fatal("clCreateKernel (%d)\n", status);
 
-	cl_mem              buf_ht[2], buf_sols, buf_dbg, rowCounters[2];
-    void                *dbg = NULL;
+	void                *dbg = NULL;
 #ifdef _DEBUG
-    size_t              dbg_size = NR_ROWS * sizeof (debug_t);
+	size_t              dbg_size = NR_ROWS * sizeof(debug_t);
 #else
-    size_t              dbg_size = 1 * sizeof (debug_t);
+	size_t              dbg_size = 1 * sizeof(debug_t);
 #endif
 
 	debug("Hash tables will use %.1f MB\n", 2.0 * HT_SIZE / 1e6);
@@ -1281,9 +1239,8 @@ void setup_context(solver_context_t& self, cl_device_id devId) {
 	self.buf_ht[0] = check_clCreateBuffer(self.ctx, CL_MEM_READ_WRITE, HT_SIZE, NULL);
 	self.buf_ht[1] = check_clCreateBuffer(self.ctx, CL_MEM_READ_WRITE, HT_SIZE, NULL);
 	self.buf_sols = check_clCreateBuffer(self.ctx, CL_MEM_READ_WRITE, sizeof(sols_t), NULL);
-    self.buf_sols = check_clCreateBuffer(ctx, CL_MEM_READ_WRITE, sizeof (sols_t), NULL);
-    self.rowCounters[0] = check_clCreateBuffer(ctx, CL_MEM_READ_WRITE, NR_ROWS, NULL);
-    self.rowCounters[1] = check_clCreateBuffer(ctx, CL_MEM_READ_WRITE, NR_ROWS, NULL);
+	self.rowCounters[0] = check_clCreateBuffer(self.ctx, CL_MEM_READ_WRITE, NR_ROWS, NULL);
+	self.rowCounters[1] = check_clCreateBuffer(self.ctx, CL_MEM_READ_WRITE, NR_ROWS, NULL);
 }
 
 void destroy_context(solver_context_t& self) {
@@ -1296,9 +1253,9 @@ void destroy_context(solver_context_t& self) {
 	clReleaseMemObject(self.buf_sols);
 	clReleaseMemObject(self.buf_ht[0]);
 	clReleaseMemObject(self.buf_ht[1]);
-	self.rowCounters[0] = check_clCreateBuffer(ctx, CL_MEM_READ_WRITE, NR_ROWS, NULL);
-    self.rowCounters[1] = check_clCreateBuffer(ctx, CL_MEM_READ_WRITE, NR_ROWS, NULL);
-
+	clReleaseMemObject(self.rowCounters[0]);
+	clReleaseMemObject(self.rowCounters[1]);
+		
 	// Release resources
 	assert(CL_SUCCESS == 0);
 	auto status = CL_SUCCESS;
