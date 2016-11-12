@@ -29,6 +29,10 @@ uint64_t	nr_nonces = 1;
 uint32_t	do_list_devices = 0;
 uint32_t	gpu_to_use = 0;
 uint32_t	mining = 0;
+#ifdef WIN32
+#define timespec timeval
+#endif
+struct timespec kern_avg_run_time;
 
 inline void debug(const char *fmt, ...)
 {
@@ -111,6 +115,29 @@ void randomize(void *p, ssize_t l)
 	for (int i = 0; i < l; i++)
 		((uint8_t *)p)[i] = rand() & 0xff;
 #endif
+}
+
+struct timespec time_diff(struct timespec start, struct timespec end)
+{
+	struct timespec temp;
+#ifdef WIN32
+	if ((end.tv_usec - start.tv_usec)<0) {
+		temp.tv_sec = end.tv_sec-start.tv_sec-1;
+		temp.tv_usec = 1000000 + end.tv_usec - start.tv_usec;
+	} else {
+		temp.tv_sec = end.tv_sec-start.tv_sec;
+		temp.tv_usec = end.tv_usec - start.tv_usec;
+	}
+#else
+	if ((end.tv_nsec-start.tv_nsec)<0) {
+		temp.tv_sec = end.tv_sec-start.tv_sec-1;
+		temp.tv_nsec = 1000000000+end.tv_nsec-start.tv_nsec;
+	} else {
+		temp.tv_sec = end.tv_sec-start.tv_sec;
+		temp.tv_nsec = end.tv_nsec-start.tv_nsec;
+	}
+#endif
+	return temp;
 }
 
 cl_mem check_clCreateBuffer(cl_context ctx, cl_mem_flags flags, size_t size, 
@@ -911,8 +938,16 @@ sols_t* solve_equihash(
     check_clSetKernelArg(k_sols, 3, &rowCounters[0]);
     check_clSetKernelArg(k_sols, 4, &rowCounters[1]);
     global_ws = NR_ROWS;
+
+	struct timespec start_time;
+#ifdef WIN32
+	gettimeofday(&start_time, NULL);
+#else
+	clock_gettime(CLOCK_MONOTONIC, &start_time);
+#endif
     check_clEnqueueNDRangeKernel(queue, k_sols, 1, NULL,
 	    &global_ws, &local_ws, 0, NULL, NULL);
+    clFlush(queue);
     
     sols_t   *sols;
 	uint32_t nr_valid_sols;
@@ -935,6 +970,7 @@ sols_t* solve_equihash(
 	}
 
 	clReleaseMemObject(buf_blake_st);
+	clFlush(queue);
 	
 	return sols;
 }
@@ -1098,7 +1134,7 @@ void mining_mode(cl_context ctx, cl_command_queue queue,
     fflush(stdout);
 #ifdef WIN32
 	TIMEVAL t;
-	gettimeofday(&t1, NULL);
+	gettimeofday(&t, NULL);
 	srand(t.tv_usec * t.tv_sec);
 	SetConsoleOutputCP(65001);
 #endif
@@ -1178,7 +1214,9 @@ void run_opencl(uint8_t *header, size_t header_len, cl_context ctx,
 }
 
 
-/*
+*/
+
+
 
 /*
 ** Scan the devices available on this platform. Try to find the device
