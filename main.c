@@ -23,7 +23,7 @@
 #include "logging.hpp"
 #include "crossplatform.hpp"
 
-uint16_t verbose = 0;
+uint16_t    verbose = 0;
 uint32_t	show_encoded = 0;
 uint64_t	nr_nonces = 1;
 uint32_t	do_list_devices = 0;
@@ -1159,6 +1159,12 @@ std::vector<platform_t> scan_platforms()
 
 void setup_context(solver_context_t& self, cl_device_id devId) {
 
+#ifdef _DEBUG
+	self.dbg_size = NR_ROWS;
+#else
+	self.dbg_size = 1;
+#endif
+
 	cl_kernel k_rounds[PARAM_K];
 	cl_int status;
 
@@ -1189,15 +1195,20 @@ void setup_context(solver_context_t& self, cl_device_id devId) {
 	/* Build program. */
 	if (!mining || verbose)
 		fprintf(stderr, "Building program\n");
-	status = clBuildProgram(program, 1, &devId,
-		"-I .. -I .", // compile options
-		NULL, NULL);
+	
+#if _DEBUG
+	status = clBuildProgram(program, 1, &devId, "-D _DEBUG -I .. -I .", NULL, NULL);
+#else
+	status = clBuildProgram(program, 1, &devId, "-I .. -I .", NULL, NULL);
+#endif
+	
 	if (status != CL_SUCCESS)
 	{
 		warn("OpenCL build failed (%d). Build log follows:\n", status);
 		show_program_build_log(program, devId);
 		exit(1);
 	}
+
 	//get_program_bins(program);
 	// Create kernel objects
 	cl_kernel k_init_ht = clCreateKernel(program, "kernel_init_ht", &status);
