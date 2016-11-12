@@ -242,7 +242,7 @@ void load_file(const char *fname, char **dat, size_t *dat_len)
 
 	size_t offset = 0;
 	while (1) {
-		int maxchars = max(0, *dat_len - offset);
+		size_t maxchars = max(0u, *dat_len - offset);
 		if (maxchars == 0)
 			fatal("not enough memory");
 		ret = read(fd, *dat + offset, maxchars);
@@ -949,9 +949,7 @@ sols_t* solve_equihash(
 	    &global_ws, &local_ws, 0, NULL, NULL);
     clFlush(queue);
     
-    sols_t   *sols;
-	uint32_t nr_valid_sols;
-	sols = (sols_t *)malloc(sizeof(*sols));
+	auto sols = (sols_t *)malloc(sizeof(sols_t));
 	if (!sols)
 		fatal("malloc: %s\n", strerror(errno));
 	check_clEnqueueReadBuffer(self.queue, self.buf_sols,
@@ -989,7 +987,6 @@ int read_last_line(char *buf, size_t len, int block)
 {
 	char	*start;
 	size_t	pos = 0;
-	ssize_t	n;
 #ifndef WIN32
 	set_blocking_mode(0, block);
 #endif
@@ -1112,8 +1109,9 @@ void mining_parse_job(char *str, uint8_t *target, size_t target_len,
 }
 
 /*
-** Run in mining mode.
-*/
+
+
+
 void mining_mode(cl_context ctx, cl_command_queue queue,
 	cl_kernel k_init_ht, cl_kernel *k_rounds, cl_kernel k_sols,
 	cl_mem *buf_ht, cl_mem buf_sols, cl_mem buf_dbg, size_t dbg_size,
@@ -1161,9 +1159,6 @@ void mining_mode(cl_context ctx, cl_command_queue queue,
           }
       }
 }
-
-/*
-
 
 void run_opencl(uint8_t *header, size_t header_len, cl_context ctx,
         cl_command_queue queue, cl_kernel k_init_ht, cl_kernel *k_rounds,
@@ -1271,10 +1266,9 @@ std::vector<platform_t> scan_platforms()
 {
 	auto ret = std::vector<platform_t>();
 
-	cl_uint     nr_platforms;
+	cl_uint nr_platforms;
 	cl_platform_id *platforms;
-	cl_uint     i, nr_devs_total;
-	cl_int      status;
+	cl_int status;
 	status = clGetPlatformIDs(0, NULL, &nr_platforms);
 	if (status != CL_SUCCESS)
 		fatal("Cannot get OpenCL platforms (%s)\n", clGetErrorString(status));
