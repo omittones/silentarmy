@@ -1,0 +1,1 @@
+py silentarmy --use=0 -c stratum+tcp://zec.suprnova.cc:2142 -u dagf2101.home -p home1 -v --instances=1

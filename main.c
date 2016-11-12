@@ -1076,6 +1076,111 @@ void mining_parse_job(char *str, uint8_t *target, size_t target_len,
 }
 
 /*
+** Run in mining mode.
+*/
+void mining_mode(cl_context ctx, cl_command_queue queue,
+	cl_kernel k_init_ht, cl_kernel *k_rounds, cl_kernel k_sols,
+	cl_mem *buf_ht, cl_mem buf_sols, cl_mem buf_dbg, size_t dbg_size,
+	uint8_t *header, cl_mem *rowCounters)
+{
+    char		line[4096];
+    uint8_t		target[SHA256_DIGEST_SIZE];
+    char		job_id[256];
+    size_t		fixed_nonce_bytes = 0;
+    uint64_t		i;
+    uint64_t		total = 0;
+    uint32_t		shares;
+    uint64_t		total_shares = 0;
+    uint64_t		t0 = 0, t1;
+    uint64_t		status_period = 500e3; // time (usec) between statuses
+
+    puts("SILENTARMY mining mode ready");
+    fflush(stdout);
+#ifdef WIN32
+	TIMEVAL t;
+	gettimeofday(&t1, NULL);
+	srand(t.tv_usec * t.tv_sec);
+	SetConsoleOutputCP(65001);
+#endif
+
+    for (i = 0; ; i++)
+      {
+        // iteration #0 always reads a job or else there is nothing to do
+
+        if (read_last_line(line, sizeof (line), !i))
+            mining_parse_job(line,
+                    target, sizeof (target),
+                    job_id, sizeof (job_id),
+                    header, ZCASH_BLOCK_HEADER_LEN,
+                    &fixed_nonce_bytes);
+        total += solve_equihash(ctx, queue, k_init_ht, k_rounds, k_sols, buf_ht,
+                buf_sols, buf_dbg, dbg_size, header, ZCASH_BLOCK_HEADER_LEN, 1,
+                fixed_nonce_bytes, target, job_id, &shares, rowCounters);
+        total_shares += shares;
+        if ((t1 = now()) > t0 + status_period)
+          {
+            t0 = t1;
+            printf("status: %" PRId64 " %" PRId64 "\n", total, total_shares);
+            fflush(stdout);
+          }
+      }
+}
+
+/*
+
+
+void run_opencl(uint8_t *header, size_t header_len, cl_context ctx,
+        cl_command_queue queue, cl_kernel k_init_ht, cl_kernel *k_rounds,
+	cl_kernel k_sols)
+{
+    cl_mem              buf_ht[2], buf_sols, buf_dbg, rowCounters[2];
+    void                *dbg = NULL;
+#ifdef ENABLE_DEBUG
+    size_t              dbg_size = NR_ROWS * sizeof (debug_t);
+#else
+    size_t              dbg_size = 1 * sizeof (debug_t);
+#endif
+    uint64_t		nonce;
+    uint64_t		total;
+    if (!mining || verbose)
+	fprintf(stderr, "Hash tables will use %.1f MB\n", 2.0 * HT_SIZE / 1e6);
+    // Set up buffers for the host and memory objects for the kernel
+    if (!(dbg = calloc(dbg_size, 1)))
+	fatal("malloc: %s\n", strerror(errno));
+    buf_dbg = check_clCreateBuffer(ctx, CL_MEM_READ_WRITE |
+	    CL_MEM_COPY_HOST_PTR, dbg_size, dbg);
+    buf_ht[0] = check_clCreateBuffer(ctx, CL_MEM_READ_WRITE, HT_SIZE, NULL);
+    buf_ht[1] = check_clCreateBuffer(ctx, CL_MEM_READ_WRITE, HT_SIZE, NULL);
+    buf_sols = check_clCreateBuffer(ctx, CL_MEM_READ_WRITE, sizeof (sols_t), NULL);
+    rowCounters[0] = check_clCreateBuffer(ctx, CL_MEM_READ_WRITE, NR_ROWS, NULL);
+    rowCounters[1] = check_clCreateBuffer(ctx, CL_MEM_READ_WRITE, NR_ROWS, NULL);
+    if (mining)
+	mining_mode(ctx, queue, k_init_ht, k_rounds, k_sols, buf_ht,
+		buf_sols, buf_dbg, dbg_size, header, rowCounters);
+    fprintf(stderr, "Running...\n");
+    total = 0;
+    uint64_t t0 = now();
+    // Solve Equihash for a few nonces
+    for (nonce = 0; nonce < nr_nonces; nonce++)
+	total += solve_equihash(ctx, queue, k_init_ht, k_rounds, k_sols, buf_ht,
+		buf_sols, buf_dbg, dbg_size, header, header_len, !!nonce,
+		0, NULL, NULL, NULL, rowCounters);
+    uint64_t t1 = now();
+    fprintf(stderr, "Total %" PRId64 " solutions in %.1f ms (%.1f Sol/s)\n",
+	    total, (t1 - t0) / 1e3, total / ((t1 - t0) / 1e6));
+    // Clean up
+    if (dbg)
+        free(dbg);
+    clReleaseMemObject(buf_dbg);
+    clReleaseMemObject(buf_sols);
+    clReleaseMemObject(buf_ht[0]);
+    clReleaseMemObject(buf_ht[1]);
+}
+
+
+/*
+
+/*
 ** Scan the devices available on this platform. Try to find the device
 ** selected by the "--use <id>" option and, if found, store the platform and
 ** device in plat_id and dev_id.
@@ -1156,6 +1261,88 @@ std::vector<platform_t> scan_platforms()
 
 	return ret;
 }
+
+/*
+
+void init_and_run_opencl(uint8_t *header, size_t header_len)
+{
+    cl_platform_id	plat_id = 0;
+    cl_device_id	dev_id = 0;
+    cl_kernel		k_rounds[PARAM_K];
+    cl_int		status;
+    scan_platforms(&plat_id, &dev_id);
+    if (!plat_id || !dev_id)
+	fatal("Selected device (ID %d) not found; see --list\n", gpu_to_use);
+    //Create context.
+    cl_context context = clCreateContext(NULL, 1, &dev_id,
+	    NULL, NULL, &status);
+    if (status != CL_SUCCESS || !context)
+	fatal("clCreateContext (%d)\n", status);
+    //Creating command queue associate with the context.
+    cl_command_queue queue = clCreateCommandQueue(context, dev_id,
+	    0, &status);
+    if (status != CL_SUCCESS || !queue)
+	fatal("clCreateCommandQueue (%d)\n", status);
+    //Create program object
+    cl_program program;
+    const char *source;
+    size_t source_len;
+#ifdef WIN32
+    load_file("input.cl", &source, &source_len);
+#else
+	source = ocl_code;
+#endif
+	source_len = strlen(source);
+    program = clCreateProgramWithSource(context, 1, (const char **)&source,
+	    &source_len, &status);
+    if (status != CL_SUCCESS || !program)
+	fatal("clCreateProgramWithSource (%d)\n", status);
+    //Build program.
+    if (!mining || verbose)
+	fprintf(stderr, "Building program\n");
+    status = clBuildProgram(program, 1, &dev_id,
+	    "-I .. -I .", // compile options
+	    NULL, NULL);
+    if (status != CL_SUCCESS)
+      {
+        warn("OpenCL build failed (%d). Build log follows:\n", status);
+        get_program_build_log(program, dev_id);
+	exit(1);
+      }
+    //get_program_bins(program);
+    // Create kernel objects
+    cl_kernel k_init_ht = clCreateKernel(program, "kernel_init_ht", &status);
+    if (status != CL_SUCCESS || !k_init_ht)
+	fatal("clCreateKernel (%d)\n", status);
+    for (unsigned round = 0; round < PARAM_K; round++)
+      {
+	char	name[128];
+	snprintf(name, sizeof (name), "kernel_round%d", round);
+	k_rounds[round] = clCreateKernel(program, name, &status);
+	if (status != CL_SUCCESS || !k_rounds[round])
+	    fatal("clCreateKernel (%d)\n", status);
+      }
+    cl_kernel k_sols = clCreateKernel(program, "kernel_sols", &status);
+    if (status != CL_SUCCESS || !k_sols)
+	fatal("clCreateKernel (%d)\n", status);
+    // Run
+    run_opencl(header, header_len, context, queue, k_init_ht, k_rounds, k_sols);
+    // Release resources
+    assert(CL_SUCCESS == 0);
+    status = CL_SUCCESS;
+    status |= clReleaseKernel(k_init_ht);
+    for (unsigned round = 0; round < PARAM_K; round++)
+	status |= clReleaseKernel(k_rounds[round]);
+    status |= clReleaseKernel(k_sols);
+    status |= clReleaseProgram(program);
+    status |= clReleaseCommandQueue(queue);
+    status |= clReleaseContext(context);
+    if (status)
+	fprintf(stderr, "Cleaning resources failed\n");
+}
+
+
+*/
 
 void setup_context(solver_context_t& self, cl_device_id devId) {
 
