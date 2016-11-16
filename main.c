@@ -33,6 +33,7 @@ uint32_t	mining = 0;
 #define timespec timeval
 #endif
 struct timespec kern_avg_run_time;
+double		kern_avg_run_time = 0;
 
 inline void debug(const char *fmt, ...)
 {
@@ -117,30 +118,24 @@ void randomize(void *p, ssize_t l)
 #endif
 }
 
-struct timespec time_diff(struct timespec start, struct timespec end)
+#define NSEC 1e-9
+double timespec_to_double(struct timespec *t)
 {
-	struct timespec temp;
-#ifdef WIN32
-	if ((end.tv_usec - start.tv_usec)<0) {
-		temp.tv_sec = end.tv_sec-start.tv_sec-1;
-		temp.tv_usec = 1000000 + end.tv_usec - start.tv_usec;
-	} else {
-		temp.tv_sec = end.tv_sec-start.tv_sec;
-		temp.tv_usec = end.tv_usec - start.tv_usec;
-	}
-#else
-	if ((end.tv_nsec-start.tv_nsec)<0) {
-		temp.tv_sec = end.tv_sec-start.tv_sec-1;
-		temp.tv_nsec = 1000000000+end.tv_nsec-start.tv_nsec;
-	} else {
-		temp.tv_sec = end.tv_sec-start.tv_sec;
-		temp.tv_nsec = end.tv_nsec-start.tv_nsec;
-	}
-#endif
-	return temp;
+    return ((double)t->tv_sec) + ((double) t->tv_nsec) * NSEC;
 }
 
-cl_mem check_clCreateBuffer(cl_context ctx, cl_mem_flags flags, size_t size, 
+void double_to_timespec(double dt, struct timespec *t)
+{
+    t->tv_sec = (long)dt;
+    t->tv_nsec = (long)((dt - t->tv_sec) / NSEC);
+}
+
+void get_time(struct timespec *t)
+{
+    clock_gettime(CLOCK_MONOTONIC, t);
+}
+
+cl_mem check_clCreateBuffer(cl_context ctx, cl_mem_flags flags, size_t size,
 	void *host_ptr)
 {
 	cl_int   status;
@@ -849,6 +844,86 @@ bool verify_sol(sols_t *sols, unsigned sol_i)
 	return true;
 }
 
+/*
+
+uint32_t verify_sols(cl_command_queue queue, cl_mem buf_sols, uint64_t *nonce,
+	uint8_t *header, size_t fixed_nonce_bytes, uint8_t *target,
+	char *job_id, uint32_t *shares, struct timespec *target_time)
+{
+    sols_t	*sols;
+    uint32_t	nr_valid_sols;
+    sols = (sols_t *)malloc(sizeof (*sols));
+    if (!sols)
+	fatal("malloc: %s\n", strerror(errno));
+    // Most OpenCL implementations of clEnqueueReadBuffer in blocking mode are
+    // good, except Nvidia implementing it as a wasteful busywait, so let's
+    // work around it by trying to sleep just a bit less than the expected
+    // amount of time.
+    cl_event readEvent;
+    check_clEnqueueReadBuffer(queue, buf_sols,
+	    CL_FALSE,	// cl_bool	blocking_read
+	    0,		// size_t	offset
+	    sizeof (*sols),	// size_t	size
+	    sols,	// void		*ptr
+	    0,		// cl_uint	num_events_in_wait_list
+	    NULL,	// cl_event	*event_wait_list
+	    &readEvent);	// cl_event	*event
+    // flushing is crucial to initiate the read *now* before sleeping
+    clFlush(queue);
+    struct timespec start_time;
+    get_time(&start_time);
+    double dtarget = timespec_to_double(target_time);
+    cl_int readStatus;
+    clGetEventInfo(readEvent, CL_EVENT_COMMAND_EXECUTION_STATUS,
+	    sizeof (cl_int), &readStatus, NULL);
+    while (readStatus != CL_COMPLETE && SLEEP_SKIP_RATIO != 1)
+      {
+	struct timespec t;
+	get_time(&t);
+	double dt = timespec_to_double(&t);
+	double delta = dtarget - dt;
+	if (delta < 0)
+	    break;
+	double_to_timespec(delta * SLEEP_RECHECK_RATIO, &t);
+	nanosleep(&t, NULL);
+	clGetEventInfo(readEvent, CL_EVENT_COMMAND_EXECUTION_STATUS,
+		sizeof (cl_int), &readStatus, NULL);
+      }
+    clWaitForEvents(1, &readEvent);
+    struct timespec end_time;
+    get_time(&end_time);
+    double dstart, dend, delta;
+    dstart = timespec_to_double(&start_time);
+    dend = timespec_to_double(&end_time);
+    delta = dend - dstart;
+    kern_avg_run_time = kern_avg_run_time * 6.0 / 10.0 + delta * (4.0 / 10.0);
+    kern_avg_run_time *= (1 - (double)SLEEP_SKIP_RATIO);
+    // let's check these solutions we just read...
+    if (sols->nr > MAX_SOLS)
+      {
+	fprintf(stderr, "%d (probably invalid) solutions were dropped!\n",
+		sols->nr - MAX_SOLS);
+	sols->nr = MAX_SOLS;
+      }
+    debug("Retrieved %d potential solutions\n", sols->nr);
+    nr_valid_sols = 0;
+    for (unsigned sol_i = 0; sol_i < sols->nr; sol_i++)
+	nr_valid_sols += verify_sol(sols, sol_i);
+    uint32_t sh = print_sols(sols, nonce, nr_valid_sols, header,
+	    fixed_nonce_bytes, target, job_id);
+    if (shares)
+	*shares = sh;
+    if (!mining || verbose)
+	fprintf(stderr, "Nonce %s: %d sol%s\n",
+		s_hexdump(nonce, ZCASH_NONCE_LEN), nr_valid_sols,
+		nr_valid_sols == 1 ? "" : "s");
+    debug("Stats: %d likely invalids\n", sols->likely_invalids);
+    free(sols);
+    return nr_valid_sols;
+}
+
+*/
+
 void __stdcall error_callback(
 	const char *errinfo,
 	const void *context,
@@ -948,6 +1023,13 @@ sols_t* solve_equihash(
     check_clEnqueueNDRangeKernel(queue, k_sols, 1, NULL,
 	    &global_ws, &local_ws, 0, NULL, NULL);
     clFlush(queue);
+
+    struct timespec start_time, target_time;
+    get_time(&start_time);
+    double dstart, dtarget = 0;
+    dstart = timespec_to_double(&start_time);
+    dtarget = dstart + kern_avg_run_time;
+    double_to_timespec(dtarget, &target_time);
     
 	auto sols = (sols_t *)malloc(sizeof(sols_t));
 	if (!sols)

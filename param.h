@@ -6,8 +6,7 @@
 #define NR_INPUTS                       (1 << PREFIX)
 // Approximate log base 2 of number of elements in hash tables
 #define APX_NR_ELMS_LOG                 (PREFIX + 1)
-// Number of rows and slots is affected by this. 20 offers the best performance
-// but occasionally misses ~1% of solutions.
+// Number of rows and slots is affected by this; 20 offers the best performance
 #define NR_ROWS_LOG                     20
 
 // Setting this to 1 might make SILENTARMY faster, see TROUBLESHOOTING.md
@@ -15,6 +14,12 @@
 
 // Number of collision items to track, per thread
 #define COLL_DATA_SIZE_PER_TH		(NR_SLOTS * 5)
+
+// Ratio of time of sleeping before rechecking if task is done (0-1)
+#define SLEEP_RECHECK_RATIO 0.60
+// Ratio of time to busy wait for the solution (0-1)
+// The higher value the higher CPU usage with Nvidia
+#define SLEEP_SKIP_RATIO 0.005
 
 // Make hash tables OVERHEAD times larger than necessary to store the average
 // number of elements per row. The ideal value is as small as possible to
