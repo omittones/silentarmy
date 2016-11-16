@@ -29,10 +29,6 @@ uint64_t	nr_nonces = 1;
 uint32_t	do_list_devices = 0;
 uint32_t	gpu_to_use = 0;
 uint32_t	mining = 0;
-#ifdef WIN32
-#define timespec timeval
-#endif
-struct timespec kern_avg_run_time;
 double		kern_avg_run_time = 0;
 
 inline void debug(const char *fmt, ...)
@@ -128,11 +124,6 @@ void double_to_timespec(double dt, struct timespec *t)
 {
     t->tv_sec = (long)dt;
     t->tv_nsec = (long)((dt - t->tv_sec) / NSEC);
-}
-
-void get_time(struct timespec *t)
-{
-    clock_gettime(CLOCK_MONOTONIC, t);
 }
 
 cl_mem check_clCreateBuffer(cl_context ctx, cl_mem_flags flags, size_t size,
@@ -1014,23 +1005,10 @@ sols_t* solve_equihash(
     check_clSetKernelArg(k_sols, 4, &rowCounters[1]);
     global_ws = NR_ROWS;
 
-	struct timespec start_time;
-#ifdef WIN32
-	gettimeofday(&start_time, NULL);
-#else
-	clock_gettime(CLOCK_MONOTONIC, &start_time);
-#endif
     check_clEnqueueNDRangeKernel(queue, k_sols, 1, NULL,
 	    &global_ws, &local_ws, 0, NULL, NULL);
     clFlush(queue);
 
-    struct timespec start_time, target_time;
-    get_time(&start_time);
-    double dstart, dtarget = 0;
-    dstart = timespec_to_double(&start_time);
-    dtarget = dstart + kern_avg_run_time;
-    double_to_timespec(dtarget, &target_time);
-    
 	auto sols = (sols_t *)malloc(sizeof(sols_t));
 	if (!sols)
 		fatal("malloc: %s\n", strerror(errno));
